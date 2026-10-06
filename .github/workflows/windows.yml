@@ -1,0 +1,32 @@
+name: Crear programa para Windows
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  crear-programa:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements-build.txt
+      - name: Probar conversion y proteccion de archivos
+        run: python -m unittest discover -s tests -v
+      - name: Crear ejecutable
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name Control_Pedidos --collect-data reportlab app.py
+      - name: Guardar programa descargable
+        uses: actions/upload-artifact@v4
+        with:
+          name: Control_Pedidos_Windows
+          path: dist/Control_Pedidos.exe
+          if-no-files-found: error
+          retention-days: 30
