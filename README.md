@@ -1,121 +1,144 @@
-# Control de pedidos de Mercado Libre
+# Control de pedidos: PDF, etiquetas y Generador
 
-Programa de escritorio en español. Selecciona uno o varios PDF de control de
-pedidos y genera automáticamente un PDF compacto para cada archivo.
+Un programa de escritorio en español para generar el control compacto de
+Mercado Libre, agregar datos a sus etiquetas ZPL y abrir el Generador de Excel.
 
-## Uso diario
+El ejecutable de Windows no requiere instalar Python. Los documentos se
+procesan en la computadora; no se envían a GitHub ni a otro servicio.
 
-1. Abre `Control_Pedidos.exe`.
-2. Pulsa **Seleccionar PDF** y elige tus archivos.
-3. El programa genera el control sin pedir confirmación. Pulsa **Abrir control**
-   para revisarlo o imprimirlo.
+## Control y etiquetas
 
-El ejecutable de Windows no requiere instalar Python. Los PDF se procesan en tu
-computadora, sin enviarlos a servidores. GitHub sirve para guardar el código y
-crear el ejecutable; no necesita tus PDF ni los datos de los compradores.
+1. Copia tres columnas: **Pack ID o Venta, Cantidad y SKU**. Puede ser una tabla
+   de Excel o una tabla del chat. Se acepta la diagonal delante del ID.
+2. En la pestaña **Control y etiquetas**, pulsa **Seleccionar ZIP** y elige el
+   ZIP descargado de Mercado Libre que contiene el PDF y el TXT.
+3. Pulsa **Pegar tabla** y después **Generar PDF y etiquetas**.
 
-## Obtener el ejecutable con GitHub
+Si ya descomprimiste el ZIP, utiliza **Seleccionar PDF** y **Seleccionar TXT**.
+Se necesita un PDF y un TXT por conjunto. Un ZIP con varios de ellos se
+rechaza para evitar elegir una pareja equivocada.
 
-Requisitos: una cuenta de GitHub, un repositorio con estos archivos y GitHub
-Actions habilitado. No es necesario instalar herramientas de programación en
-tu computadora para esta opción.
+El programa crea una carpeta nueva `Surtido_nombre_fecha_hora`, junto al archivo
+seleccionado o en la carpeta de salida que elijas. Contiene:
 
-1. Crea un repositorio llamado `Control-Pedidos`. Puedes hacerlo privado.
-2. Sube el contenido de esta carpeta a la raíz del repositorio, incluida la
-   carpeta `.github` con el archivo `.github/workflows/windows.yml`.
-   No subas el ZIP cerrado; sube sus archivos descomprimidos.
-3. En **Actions** (Acciones), abre **Crear programa para Windows**.
-4. Cuando la ejecución termine correctamente, abre sus resultados y descarga
-   **Control_Pedidos_Windows**, en **Artifacts** (Archivos generados).
-5. Extrae el ZIP descargado y abre `Control_Pedidos.exe`.
+- `Control_resumido.pdf`: control compacto de pedidos.
+- `Etiquetas/nombre.txt`: etiquetas ZPL modificadas, para usar con el mismo
+  procedimiento de impresión que ya utilizas.
+- `Revision.txt`: coincidencias y filas de la tabla que no se utilizaron.
 
-El proceso se ejecuta al subir cambios a `main` o `master`. También se puede
-iniciar manualmente desde **Run workflow** (Ejecutar flujo de trabajo). Si
-GitHub muestra que Actions está deshabilitado, habilítalo para este repositorio.
-Los archivos generados se conservan 30 días; puedes volver a ejecutar el flujo.
+La generación es conjunta: si falta un pedido, un SKU o una etiqueta, o si un
+identificador no se puede leer, no se publica un conjunto nuevo. Los originales
+y los resultados anteriores no se sobrescriben.
 
-## Archivos generados
+### Cantidades
 
-- Primer resultado: `Control_resumido.pdf`.
-- Si ese nombre ya existe: `Control_resumido_YYYY-MM-DD.pdf` y sufijos numéricos.
-- De forma predeterminada se guardan junto a cada PDF original.
-- **Elegir carpeta de salida** permite guardarlos en otra carpeta.
-- El programa nunca sobrescribe el PDF original ni un resultado anterior.
-- Si un archivo no se puede interpretar o validar, no genera un PDF nuevo
-  para ese archivo. Los demás archivos seleccionados se procesan por separado.
+Las etiquetas usan las cantidades de la tabla copiada, tal como el BAT original.
+El control PDF conserva las cantidades del PDF original. Por ejemplo, si el PDF
+indica dos paquetes de 20 toallas y la tabla indica 40, la etiqueta muestra
+`40/TPLBL` y el control muestra `TPLBL ×2`. No se deducen multiplicadores del SKU.
 
-## Contenido y diseño
+Los renglones repetidos se conservan. Dos renglones del mismo SKU con cantidades
+y descripciones diferentes siguen siendo dos renglones.
 
-- A4 vertical, blanco y negro, dos columnas, márgenes de 6 mm aproximadamente.
-- Consecutivo grande desde 01 para cada PDF, sin reinicio entre páginas.
-- Un mismo número de Venta mantiene juntos todos sus productos.
-- SKU en negritas y cantidad destacada como ×1, ×2, etc.
-- Se conservan el nombre comercial y las variantes del producto, incluido
-  Color, Nombre del diseño, Talla y otros campos presentes en el original.
-- Se conservan Pack ID y Venta cuando existen. Esto resuelve la contradicción
-  del documento de requisitos aplicando su regla final sobre ambos campos.
-- Un SKU repetido con descripción o cantidad diferente conserva sus renglones.
-- Se eliminan comprador, identificadores alfanuméricos, mensajes, encabezados y
-  gráficos del original.
-- Cada pedido tiene únicamente un recuadro exterior y una línea vertical junto
-  al número. No hay separadores horizontales entre productos.
-- Un pedido más largo que una columna continúa con el mismo consecutivo y la
-  palabra «Continuación». Los productos no reciben nuevos consecutivos.
+### Numeración y coincidencias
 
-## Lectura y validación
+- Cada pedido conserva el consecutivo que le corresponde en el PDF.
+- Las etiquetas se relacionan por Pack ID o por Venta; no por su posición.
+- Los identificadores divididos en varios campos ZPL se reconstruyen por sus
+  coordenadas. Los fragmentos impresos dos veces se cuentan una sola vez.
+- Los bloques de configuración como `^XA^MCY^XZ` se conservan sin numerarse.
+- Si las etiquetas están en otro orden, mantienen el número del pedido correcto.
+- Se verifica que los SKU de la tabla coincidan con los del pedido.
+- Una fila de la tabla con un ID que no está en el PDF se registra como no
+  utilizada. No se añade a otro pedido.
+- Se conservan los códigos de barras, QR, destinatarios y campos de envío.
+- Se agregan el consecutivo y la línea `cantidad/SKU` de la tabla. La fuente de
+  esa línea se ajusta cuando contiene varios productos. Si no cabe de forma
+  legible, la generación se detiene.
 
-La versión inicial reconoce PDF con texto seleccionable y la tabla de Mercado
-Libre con columnas de identificación y productos, como la muestra `YH.pdf`.
-No utiliza OCR: un PDF escaneado, protegido con contraseña, ilegible o con una
-estructura diferente detiene la conversión con un mensaje en español.
+La versión reconoce los formatos ZPL de las muestras entregadas, incluida la
+etiqueta compacta sin marcador LAST CLUSTER. Un nuevo diseño de Mercado Libre
+puede requerir actualizar el lector o la posición del texto agregado.
 
-Antes de publicar el resultado se comprueban los renglones de SKU y cantidad,
-las agrupaciones, los identificadores y que el PDF generado se pueda abrir. Las
-cantidades mal formadas, productos sin SKU, identificadores contradictorios y
-descripciones incompletas detectadas detienen la generación. Si un campo
-opcional no aparece en el original, se omite; no se inventa ningún valor.
+## Solo control PDF
 
-Como todo lector basado en una estructura conocida, un cambio de formato del
-exportador puede requerir actualizar el programa. No se asegura compatibilidad
-con todos los PDF de Mercado Libre sin probar esas estructuras.
+En la pestaña **Solo control PDF**, pulsa **Seleccionar PDF** y elige uno o varios
+archivos. Se genera automáticamente un control para cada uno, igual que antes.
 
-## Ejecutar el código sin crear el EXE
+- A4 vertical, blanco y negro, dos columnas y márgenes pequeños imprimibles.
+- Consecutivo grande desde 01, sin reinicio entre páginas.
+- Los productos de una misma Venta permanecen juntos.
+- SKU y cantidad destacados; descripción comercial y variantes conservadas.
+- Pack ID y Venta visibles cuando existen; sin líneas vacías por datos ausentes.
+- Solo recuadro exterior y línea vertical junto al número. Sin separadores
+  horizontales internos.
+- Un pedido que excede una columna continúa con el mismo número.
+- Se eliminan compradores, encabezados, mensajes y gráficos del PDF original.
 
-Esta opción sí requiere **Python 3.11 o posterior**, con su lanzador `py`
-instalado en Windows, y conexión a internet para descargar las dependencias.
+El resultado se llama `Control_resumido.pdf`. Si existe, se usa un nombre con
+fecha y sufijo para no sustituirlo.
 
-1. Ejecuta `Preparar_Programa.bat` una vez. Instala las dependencias en `.venv`,
-   dentro de esta misma carpeta.
-2. Después utiliza `Abrir_Control.bat`.
+Se necesita un PDF con texto seleccionable y la tabla de identificación y
+productos. Un PDF escaneado, protegido, ilegible o con otra estructura se
+rechaza; esta versión no utiliza OCR.
 
-También se pueden arrastrar uno o varios PDF sobre `Abrir_Control.bat`.
+## Generador de Excel
+
+1. Copia los datos de tu tabla dinámica como lo haces habitualmente.
+2. En **Generador de Excel**, pulsa **Abrir Generador**.
+
+El botón abre el BAT y el PowerShell originales entregados por el usuario. Se
+incluyen dentro del EXE y se copian a una carpeta permanente para que sus salidas
+no desaparezcan al cerrar el programa. Se corrige únicamente la correspondencia
+de nombres: `GENERADOR.bat` llama a `Generador.ps1`.
+
+El Generador lee el portapapeles y produce los mismos archivos `lista.pmc`,
+`f5.ahk`, `f11.ahk` o `f511.ahk`, según sus reglas originales. La carpeta de salida
+se muestra en la ventana y puede elegirse con **Elegir carpeta**. De forma
+predeterminada se usa `Documents/ControlPedidos/Generador` del usuario.
+
+Este botón crea los archivos; para utilizarlos se requieren los mismos programas
+que ya usas para AHK y PMC. No los ejecuta automáticamente.
+
+## Obtener el EXE con GitHub
+
+En **Actions** (Acciones), abre una ejecución correcta de **Crear programa para
+Windows** y descarga **Control_Pedidos_Windows** desde **Artifacts** (Archivos
+generados). Extrae el ZIP y abre `Control_Pedidos.exe`.
+
+El flujo se ejecuta al subir cambios a `main` o `master`, o manualmente con
+**Run workflow** (Ejecutar flujo de trabajo). Los artefactos se conservan 30 días
+y pueden volver a generarse. No subas documentos reales de compradores al
+repositorio.
 
 ## Desarrollo
+
+Requisitos para ejecutar el código: Python 3.11 o posterior y las dependencias
+de `requirements.txt`. Para crear el EXE se usan las de `requirements-build.txt`.
+No se necesita instalar estas herramientas para utilizar el EXE ya construido.
 
 ```bash
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
 python app.py
 python app.py --sin-ventana --salida controles archivo.pdf
+python app.py --sin-ventana --zip pedidos.zip --tabla tabla.txt --salida controles
+python app.py --sin-ventana --txt etiquetas.txt --tabla tabla.txt archivo.pdf
 ```
 
-El programa contiene pruebas con documentos sintéticos para las agrupaciones,
-continuaciones, consecutivos hasta 120, variantes, errores y protección de
-archivos. No se incluyen PDF reales ni información de compradores en el código.
+En Windows, `Preparar_Programa.bat` prepara las dependencias dentro de `.venv`
+y `Abrir_Control.bat` abre la ventana. Esta opción sí requiere Python instalado.
 
-Prueba opcional de la muestra original usada en esta entrega:
-
-```bash
-CONTROL_SAMPLE_PDF=/ruta/YH.pdf python -m unittest discover -s tests -v
-```
-
-Construcción local del EXE en Windows:
+Construcción del ejecutable en Windows:
 
 ```bash
 python -m pip install -r requirements-build.txt
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name Control_Pedidos --collect-data reportlab app.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name Control_Pedidos --collect-data reportlab --add-data "tools:tools" app.py
+python tests/smoke_windows.py dist/Control_Pedidos.exe
 ```
 
-La entrega inicial incluye código fuente y configuración de GitHub Actions. El
-EXE de Windows se obtiene al ejecutar ese flujo en GitHub; no está dentro del
-ZIP de código fuente.
+Las pruebas cubren los controles PDF, tablas copiadas, Pack ID y Venta
+fragmentados, configuración ZPL, orden de etiquetas, protección de archivos,
+conservación de códigos de envío y preparación del Generador. GitHub también
+ejecuta una prueba del EXE empaquetado que genera un PDF y un TXT a partir de un
+ZIP sintético. Los documentos reales de prueba no se incluyen en el código.

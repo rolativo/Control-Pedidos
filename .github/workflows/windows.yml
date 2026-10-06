@@ -22,7 +22,9 @@ jobs:
       - name: Probar conversion y proteccion de archivos
         run: python -m unittest discover -s tests -v
       - name: Crear ejecutable
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name Control_Pedidos --collect-data reportlab app.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name Control_Pedidos --collect-data reportlab --add-data "tools:tools" app.py
+      - name: Probar ejecutable completo en Windows
+        run: python tests/smoke_windows.py dist/Control_Pedidos.exe
       - name: Guardar programa descargable
         uses: actions/upload-artifact@v4
         with:

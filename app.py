@@ -24,7 +24,7 @@ def open_path(path: Path):
 
 
 class Application:
-    def __init__(self, root: tk.Tk, initial_files: list[str] | None = None):
+    def __init__(self, root: tk.Tk, initial_files: list[str] | None = None, container=None):
         self.root = root
         self.events = queue.Queue()
         self.outputs: dict[str, Path] = {}
@@ -39,7 +39,7 @@ class Application:
             style.theme_use("vista")
         style.configure("TButton", padding=8)
         style.configure("Treeview", rowheight=28)
-        frame = ttk.Frame(root, padding=20)
+        frame = ttk.Frame(container if container is not None else root, padding=20)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="Control de pedidos", font=("Segoe UI", 20, "bold")).pack(anchor="w")
         ttk.Label(frame, text="Selecciona tus PDF. El control se genera automáticamente.",
@@ -178,23 +178,78 @@ def main():
     parser.add_argument("files", nargs="*", help="PDF originales")
     parser.add_argument("--sin-ventana", action="store_true", help="Procesar sin interfaz")
     parser.add_argument("--salida", help="Carpeta para los PDF generados")
+    parser.add_argument("--zip", dest="zip_path", help="ZIP con el PDF y el TXT")
+    parser.add_argument("--txt", help="TXT de etiquetas, para combinar con un PDF")
+    parser.add_argument("--tabla", help="Archivo con las tres columnas copiadas")
     args = parser.parse_args()
     if args.sin_ventana:
+        if args.zip_path or args.txt:
+            from etiquetas import bundle_zip, bundle_files
+            if not args.tabla:
+                parser.error("Selecciona el archivo de tabla con --tabla.")
+            if args.txt and len(args.files) != 1:
+                parser.error("Selecciona un PDF para combinarlo con --txt.")
+            try:
+                table = Path(args.tabla).read_text(encoding="utf-8-sig")
+                result = (bundle_zip(Path(args.zip_path), table, Path(args.salida) if args.salida else None)
+                          if args.zip_path else bundle_files(Path(args.files[0]), Path(args.txt), table,
+                          Path(args.salida) if args.salida else None))
+                if sys.stdout:
+                    print(result.folder)
+                return 0
+            except (ControlError, OSError) as exc:
+                if sys.stderr:
+                    print(f"ERROR: {exc}", file=sys.stderr)
+                return 1
         if not args.files:
             parser.error("Selecciona por lo menos un PDF.")
         failed = False
         for file in args.files:
             try:
-                print(convert(file, args.salida).path)
+                result = convert(file, args.salida)
+                if sys.stdout:
+                    print(result.path)
             except (ControlError, OSError) as exc:
-                print(f"ERROR: {exc}", file=sys.stderr)
+                if sys.stderr:
+                    print(f"ERROR: {exc}", file=sys.stderr)
                 failed = True
         return 1 if failed else 0
     root = tk.Tk()
-    app = Application(root, args.files)
+    from unificado import BundlePanel, GeneratorPanel
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill="both", expand=True)
+    control_tab, bundle_tab, generator_tab = [ttk.Frame(notebook) for _ in range(3)]
+    notebook.add(control_tab, text="Solo control PDF")
+    notebook.add(bundle_tab, text="Control y etiquetas")
+    notebook.add(generator_tab, text="Generador de Excel")
+    initial_pdfs = [f for f in args.files if Path(f).suffix.lower() == ".pdf"] if not args.txt else []
+    app = Application(root, initial_pdfs, control_tab)
+    panel = BundlePanel(root, bundle_tab, open_path)
+    generator = GeneratorPanel(root, generator_tab, open_path)
+    root.geometry("1000x720")
+    root.minsize(960, 660)
+    root.title("Control de pedidos · PDF, etiquetas y Generador")
+    zipped = args.zip_path or next((f for f in args.files if Path(f).suffix.lower() == ".zip"), None)
+    if zipped:
+        panel.source_zip = Path(zipped)
+        panel.update_source()
+    if args.tabla:
+        panel.text.insert("1.0", Path(args.tabla).read_text(encoding="utf-8-sig"))
+    if zipped or args.txt:
+        if args.txt:
+            panel.source_pdf = Path(args.files[0]) if args.files else None
+            panel.source_txt = Path(args.txt)
+            panel.update_source()
+        notebook.select(bundle_tab)
+    elif initial_pdfs:
+        notebook.select(control_tab)
+    else:
+        notebook.select(bundle_tab)
     if args.salida:
         app.folder = Path(args.salida)
         app.location.set("Se guardará en: " + args.salida)
+        panel.output_root = Path(args.salida)
+        panel.folder_status.set("Los resultados se guardarán en: " + args.salida)
     root.mainloop()
     return 0
 
