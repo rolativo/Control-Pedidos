@@ -4,12 +4,13 @@ import queue
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from control import ControlError
 from etiquetas import bundle_zip, bundle_files, parse_table
 from generador import prepare_generator
+from diagnostico import record_error
 
 
 class BundlePanel:
@@ -111,8 +112,8 @@ class BundlePanel:
             text = self.root.clipboard_get()
             rows = parse_table(text)
         except (tk.TclError, ControlError) as exc:
-            self.status.set(str(exc) if isinstance(exc, ControlError) else
-                            "El portapapeles no contiene texto. Copia las tres columnas primero.")
+            self.show_error(str(exc) if isinstance(exc, ControlError) else
+                            "El portapapeles no contiene texto. Copia las tres columnas primero.", exc)
             return
         self.text.delete("1.0", "end")
         self.text.insert("1.0", text)
@@ -127,7 +128,7 @@ class BundlePanel:
             if not self.source_zip and not (self.source_pdf and self.source_txt):
                 raise ControlError("Selecciona el ZIP, o selecciona el PDF y el TXT por separado.")
         except ControlError as exc:
-            self.status.set(str(exc))
+            self.show_error(str(exc), exc)
             return
         source_zip, source_pdf, source_txt, output = self.source_zip, self.source_pdf, self.source_txt, self.output_root
         self.busy = True
@@ -143,12 +144,10 @@ class BundlePanel:
                           bundle_files(source_pdf, source_txt, table, output))
                 self.events.put((True, result))
             except ControlError as exc:
-                self.events.put((False, str(exc)))
-            except OSError:
-                self.events.put((False, "No se pudo leer un archivo o escribir en la carpeta de salida. "
-                                  "No se publicó un conjunto nuevo."))
-            except Exception:
-                self.events.put((False, "No se pudo completar el conjunto. No se publicó un resultado nuevo."))
+                self.events.put((False, record_error(str(exc), source_zip or source_pdf, output, exc)))
+            except Exception as exc:
+                self.events.put((False, record_error("No se pudo completar el conjunto: " + str(exc),
+                                                     source_zip or source_pdf, output, exc)))
         threading.Thread(target=work, daemon=True).start()
 
     def poll(self):
@@ -168,9 +167,16 @@ class BundlePanel:
                 self.status.set(message + "\n" + str(result.folder))
             else:
                 self.status.set(result)
+                messagebox.showerror("No se generó el conjunto", result, parent=self.root)
         except queue.Empty:
             pass
         self.root.after(100, self.poll)
+
+    def show_error(self, message, exception=None):
+        message = record_error(message, self.source_zip or self.source_pdf,
+                               self.output_root, exception)
+        self.status.set(message)
+        messagebox.showerror("No se pudo continuar", message, parent=self.root)
 
     def open_result(self, key):
         if self.result:

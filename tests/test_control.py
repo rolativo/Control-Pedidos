@@ -123,15 +123,51 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(list(self.output.iterdir()), [existing])
         self.assertEqual(existing.read_bytes(), b"existing control")
 
-    def test_product_missing_sku_is_rejected(self):
+    def test_product_without_sku_keeps_its_own_quantity_and_variants(self):
         lines = entries()
-        lines.extend([(261,170,"Producto sin SKU",True),
-                      (261,200,"Otro producto",True),
-                      (261,212,"SKU: SKU-B",False), (261,224,"Cantidad: 1",False)])
+        lines.extend([(261,170,"Funda sin SKU en origen",True),
+                      (261,182,"Cantidad: 3",False),
+                      (261,194,"Color: Gris",False),
+                      (261,216,"Otro producto",True),
+                      (261,228,"SKU: SKU-B",False), (261,240,"Cantidad: 1",False)])
+        fixture(self.source, [lines])
+        orders, _ = read_orders(self.source)
+        self.assertEqual([(p.sku, p.quantity) for p in orders[0].products],
+                         [("SKU-A",2), (None,3), ("SKU-B",1)])
+        self.assertEqual(orders[0].products[1].variants, [("Color","Gris")])
+        result = convert(self.source, self.output)
+        self.assertEqual((result.orders, result.products, result.units), (1,3,6))
+        with fitz.open(result.path) as doc:
+            text = doc[0].get_text()
+        self.assertIn("Funda sin SKU en origen",text)
+        self.assertIn("×3",text)
+        self.assertNotIn("None",text)
+
+    def test_title_only_and_variant_only_product_omit_absent_fields(self):
+        lines = entries() + [(261,170,"Producto solo con nombre",True),
+                             (261,200,"Otro producto sin SKU",True),
+                             (261,212,"Color: Gris",False)]
+        fixture(self.source,[lines])
+        orders, _ = read_orders(self.source)
+        self.assertEqual(len(orders[0].products),3)
+        self.assertIsNone(orders[0].products[1].sku)
+        self.assertIsNone(orders[0].products[1].quantity)
+        self.assertEqual(orders[0].products[2].variants,[("Color","Gris")])
+
+    def test_explicit_unreadable_sku_is_still_rejected(self):
+        lines = entries() + [(261,170,"Producto con SKU ilegible",True),
+                             (261,182,"SKU: ",False), (261,194,"Cantidad: 1",False)]
         fixture(self.source, [lines])
         with self.assertRaises(ControlError):
             convert(self.source, self.output)
         self.assertFalse(self.output.exists())
+
+    def test_quantity_without_any_product_is_rejected(self):
+        lines = [entry for entry in entries() if entry[0] < 200]
+        lines.append((261,95,"Cantidad: 3",False))
+        fixture(self.source,[lines])
+        with self.assertRaises(ControlError):
+            convert(self.source,self.output)
 
     def test_no_overwrite_and_number_restarts_for_each_pdf(self):
         fixture(self.source, [entries()])

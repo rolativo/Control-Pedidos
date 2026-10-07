@@ -123,6 +123,28 @@ class LabelTests(unittest.TestCase):
         result = transform_labels(label(), [self.order], self.rows + [TableRow(self.order.sale,100,"SKU-A")])
         self.assertEqual(result.labels[0].text, "40/SKU-A /100/SKU-A")
 
+    def test_absent_pdf_sku_uses_extra_table_row_only_on_label_and_reports_it(self):
+        lines = entries() + [(261,170,"Funda sin SKU",True), (261,182,"Cantidad: 1",False),
+                             (261,194,"Color: Gris",False)]
+        fixture(self.pdf,[lines])
+        self.txt.write_text(label(),encoding="utf-8")
+        table = "/2000018000000001\t40\tSKU-A\n/2000018000000001\t2\tFUNDA-TABLA"
+        result = bundle_files(self.pdf,self.txt,table,self.output)
+        self.assertIn("40/SKU-A /2/FUNDA-TABLA",result.labels_file.read_text())
+        self.assertIn("no se puede verificar",result.report.read_text())
+        with fitz.open(result.pdf) as doc:
+            text = doc[0].get_text()
+        self.assertIn("Funda sin SKU",text)
+        self.assertNotIn("FUNDA-TABLA",text)
+        self.assertNotIn("None",text)
+
+    def test_absent_pdf_sku_does_not_hide_mismatches_of_known_skus(self):
+        self.order.products.append(Product(None,1,"Funda sin SKU"))
+        for rows in [self.rows, [TableRow(self.order.pack_id,1,"ERROR")],
+                     self.rows + [TableRow(self.order.pack_id,1,"B"),TableRow(self.order.pack_id,1,"C")]]:
+            with self.subTest(rows=rows), self.assertRaises(ControlError):
+                transform_labels(label(),[self.order],rows)
+
     def test_zip_without_extracting_member_paths(self):
         fixture(self.pdf, [entries()])
         archive = self.folder / "descarga.zip"

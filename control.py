@@ -23,7 +23,7 @@ class ControlError(Exception):
 
 @dataclass
 class Product:
-    sku: str
+    sku: str | None
     quantity: int | None
     description: str
     variants: list[tuple[str, str]] = field(default_factory=list)
@@ -148,6 +148,14 @@ def parse_products(lines: list[Line], identity: str) -> list[Product]:
             current = None
             quantity_seen = False
 
+    def without_sku():
+        nonlocal current, title, quantity_seen
+        if title:
+            finish()
+            current = Product(None, None, clean(" ".join(title)))
+            title = []
+            quantity_seen = False
+
     for line in lines:
         match = FIELD.match(line.text)
         key = clean(match.group(1)).casefold() if match else None
@@ -160,14 +168,16 @@ def parse_products(lines: list[Line], identity: str) -> list[Product]:
             title = []
             last_field = "sku"
         elif key == "cantidad":
-            if current is None or title or quantity_seen or not re.fullmatch(r"[1-9]\d*", value):
+            without_sku()
+            if current is None or quantity_seen or not re.fullmatch(r"[1-9]\d*", value):
                 raise ControlError(f"Página {line.page}, pedido {identity}: cantidad sin reconocer "
                                    f"o sin SKU correcto ({line.text}).")
             current.quantity = int(value)
             quantity_seen = True
             last_field = "cantidad"
         elif match and not line.bold:
-            if current is None or title or not value:
+            without_sku()
+            if current is None or not value:
                 raise ControlError(f"Página {line.page}, pedido {identity}: variante sin reconocer "
                                    f"({line.text}).")
             current.variants.append((clean(match.group(1)), value))
@@ -175,8 +185,7 @@ def parse_products(lines: list[Line], identity: str) -> list[Product]:
         elif line.bold or current is None or title:
             if (title and previous and line.page == previous.page
                     and line.y - previous.y > 14):
-                raise ControlError(f"Página {line.page}, pedido {identity}: "
-                                   "hay un producto cuya descripción no tiene SKU.")
+                without_sku()
             if current is not None:
                 finish()
             title.append(line.text)
@@ -191,9 +200,8 @@ def parse_products(lines: list[Line], identity: str) -> list[Product]:
             title.append(line.text)
             last_field = "title"
         previous = line
+    without_sku()
     finish()
-    if title:
-        raise ControlError(f"Pedido {identity}: descripción sin SKU; el PDF podría estar incompleto.")
     if not products:
         raise ControlError(f"Pedido {identity}: no se encontraron sus productos.")
     return products
@@ -248,7 +256,7 @@ def read_orders(source: Path) -> tuple[list[Order], int]:
         order = group["order"]
         order.products = parse_products(group["lines"], order.sale or order.pack_id)
     parsed = [p for order in orders for p in order.products]
-    if Counter(p.sku for p in parsed) != sku_audit:
+    if Counter(p.sku for p in parsed if p.sku is not None) != sku_audit:
         raise ControlError("La validación detectó SKU faltantes o duplicados. No se generó un PDF.")
     if Counter(p.quantity for p in parsed if p.quantity is not None) != qty_audit:
         raise ControlError("La validación detectó cantidades faltantes o duplicadas. No se generó un PDF.")
@@ -304,7 +312,9 @@ def content(order: Order, products: list[Product], width: float, continuation: b
         rows.append(("", "Control", 1, 3 if i else 2, "left"))
         qty = f"×{p.quantity}" if p.quantity is not None else ""
         qty_width = pdfmetrics.stringWidth(qty, "ControlBold", 11) + 9 if qty else 0
-        sku_rows = wrap(p.sku, width - qty_width, "ControlBold", 10)
+        sku_rows = wrap(p.sku, width - qty_width, "ControlBold", 10) if p.sku else []
+        if not sku_rows and qty:
+            rows.append((qty, "ControlBold", 11, 12, "left"))
         for j, text in enumerate(sku_rows):
             rows.append((text, "ControlBold", 10, 12, "sku:" + qty if j == 0 else "left"))
         if p.variants:
@@ -320,7 +330,7 @@ def render_pdf(orders: list[Order], destination: Path) -> int:
     register_fonts()
     for order in orders:
         for product in order.products:
-            texts = [product.sku, product.description]
+            texts = [product.sku or "", product.description]
             texts.extend(label + value for label, value in product.variants)
             for text in texts:
                 if any(ord(char) not in pdfmetrics.getFont("Control").face.charToGlyph

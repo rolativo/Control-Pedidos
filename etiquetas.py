@@ -174,14 +174,18 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow]) -> La
         else:
             unused.append(row)
     for number, order in enumerate(orders, 1):
-        expected = Counter(p.sku for p in order.products)
+        expected = Counter(p.sku for p in order.products if p.sku is not None)
         actual = Counter(row.sku for row in table_by_order[number])
-        if expected != actual:
+        unknown = sum(p.sku is None for p in order.products)
+        if expected - actual or sum((actual - expected).values()) != unknown:
             missing = list((expected - actual).elements())
             extra = list((actual - expected).elements())
             detail = ("faltan " + ", ".join(missing) if missing else "")
             if extra:
                 detail += ("; " if detail else "") + "sobran " + ", ".join(extra)
+            if unknown:
+                detail += ("; " if detail else "") + (f"el PDF tiene {unknown} producto(s) sin SKU; "
+                          "incluye también sus filas en la tabla")
             raise ControlError(f"Tabla del pedido {number:02d}: {detail}. No se generó el conjunto.")
     matches = list(BLOCK.finditer(text))
     if not matches or len(matches) != text.count("^XA") or len(matches) != text.count("^XZ"):
@@ -292,6 +296,12 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
                       "Cantidades de las etiquetas: las de la tabla copiada.", "",
                       "COINCIDENCIAS"]
             report.extend(f"{label.number:02d} | {label.identifier} | {label.text}" for label in labels.labels)
+            report.extend(["", "PRODUCTOS SIN SKU EN EL PDF ORIGINAL"])
+            report.extend(f"{number:02d} | {product.description} | "
+                          "Conservado sin SKU en el control. La fila adicional de la tabla "
+                          "se usa solo en la etiqueta; su SKU no se puede verificar contra el PDF."
+                          for number, order in enumerate(orders, 1)
+                          for product in order.products if product.sku is None)
             report.extend(["", "FILAS DE LA TABLA NO UTILIZADAS", f"Total: {len(labels.unused_rows)}"])
             report.extend(f"{row.identifier}\t{row.quantity}\t{row.sku}" for row in labels.unused_rows)
             report_path.write_text("\n".join(report) + "\n", encoding="utf-8")

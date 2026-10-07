@@ -69,6 +69,8 @@ archivos. Se genera automáticamente un control para cada uno, igual que antes.
 - Consecutivo grande desde 01, sin reinicio entre páginas.
 - Los productos de una misma Venta permanecen juntos.
 - SKU y cantidad destacados; descripción comercial y variantes conservadas.
+- Si un producto no tiene SKU en el original, conserva su descripción, cantidad
+  y variantes dentro del mismo pedido; no se inventa un SKU.
 - Pack ID y Venta visibles cuando existen; sin líneas vacías por datos ausentes.
 - Solo recuadro exterior y línea vertical junto al número. Sin separadores
   horizontales internos.
@@ -77,6 +79,18 @@ archivos. Se genera automáticamente un control para cada uno, igual que antes.
 
 El resultado se llama `Control_resumido.pdf`. Si existe, se usa un nombre con
 fecha y sufijo para no sustituirlo.
+
+Si ocurre un error, aparece una ventana con el motivo y se guarda
+`Error_Control.txt` (o un nombre con sufijo si ya existe). Se intenta guardarlo
+en la carpeta de salida, junto al original o en una carpeta local de respaldo.
+La ventana indica la ruta. También se registran errores al pegar la tabla y
+errores inesperados de la interfaz o del inicio del EXE.
+
+En **Control y etiquetas**, la tabla debe incluir una fila por cada producto,
+también los que no tienen SKU en el PDF. Los SKU que sí aparecen en el PDF se
+verifican como antes. Para productos sin SKU en origen, la fila adicional se
+usa solamente en la etiqueta: no se agrega al control ni se presenta como una
+coincidencia verificada. Esta limitación queda indicada en `Revision.txt`.
 
 Se necesita un PDF con texto seleccionable y la tabla de identificación y
 productos. Un PDF escaneado, protegido, ilegible o con otra estructura se

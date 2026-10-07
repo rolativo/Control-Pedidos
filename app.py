@@ -9,9 +9,10 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from control import ControlError, convert
+from diagnostico import record_error, install_handlers, startup_error
 
 
 def open_path(path: Path):
@@ -112,13 +113,10 @@ class Application:
                     result = convert(file, folder)
                     self.events.put(("success", row, result))
                 except ControlError as exc:
-                    self.events.put(("error", row, str(exc)))
-                except OSError:
-                    self.events.put(("error", row, "No se pudo leer el archivo o escribir en la "
-                                      "carpeta elegida. Revisa que tengas acceso."))
-                except Exception:
-                    self.events.put(("error", row, "No se pudo completar la conversión. "
-                                      "No se generó un PDF nuevo."))
+                    self.events.put(("error", row, record_error(str(exc), file, folder, exc)))
+                except Exception as exc:
+                    self.events.put(("error", row, record_error("No se pudo completar la conversión: "
+                                      + str(exc), file, folder, exc)))
             self.events.put(("done", "", None))
 
         threading.Thread(target=work, daemon=True).start()
@@ -142,6 +140,7 @@ class Application:
                 else:
                     values[1] = "No se generó"
                     self.errors[row] = payload
+                    messagebox.showerror("No se generó el control", payload, parent=self.root)
                 self.table.item(row, values=values)
                 self.table.selection_set(row)
                 self.table.see(row)
@@ -197,9 +196,10 @@ def main():
                 if sys.stdout:
                     print(result.folder)
                 return 0
-            except (ControlError, OSError) as exc:
+            except Exception as exc:
+                message = record_error(str(exc), args.zip_path or args.files[0], args.salida, exc)
                 if sys.stderr:
-                    print(f"ERROR: {exc}", file=sys.stderr)
+                    print(f"ERROR: {message}", file=sys.stderr)
                 return 1
         if not args.files:
             parser.error("Selecciona por lo menos un PDF.")
@@ -209,12 +209,14 @@ def main():
                 result = convert(file, args.salida)
                 if sys.stdout:
                     print(result.path)
-            except (ControlError, OSError) as exc:
+            except Exception as exc:
+                message = record_error(str(exc), file, args.salida, exc)
                 if sys.stderr:
-                    print(f"ERROR: {exc}", file=sys.stderr)
+                    print(f"ERROR: {message}", file=sys.stderr)
                 failed = True
         return 1 if failed else 0
     root = tk.Tk()
+    install_handlers(root)
     from unificado import BundlePanel, GeneratorPanel
     notebook = ttk.Notebook(root)
     notebook.pack(fill="both", expand=True)
@@ -255,4 +257,9 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        code = main()
+    except Exception as exc:
+        startup_error(exc)
+        code = 1
+    raise SystemExit(code)
