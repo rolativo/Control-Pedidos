@@ -12,7 +12,7 @@ class DiagnosticTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.folder = Path(self.tmp.name)
+        self.folder = Path(self.tmp.name).resolve()
 
     def test_records_cause_without_overwriting_previous_error(self):
         try:
@@ -20,12 +20,12 @@ class DiagnosticTests(unittest.TestCase):
         except ControlError as exc:
             message = record_error(str(exc),self.folder / "entrada.pdf",exception=exc)
         first = self.folder / "Error_Control.txt"
-        contents = first.read_text()
+        contents = first.read_text(encoding="utf-8")
         self.assertIn(str(first),message)
         self.assertIn("ControlError: Cantidad ilegible",contents)
         record_error("Segundo error",output=self.folder)
-        self.assertEqual(first.read_text(),contents)
-        self.assertIn("Segundo error",(self.folder / "Error_Control_1.txt").read_text())
+        self.assertEqual(first.read_text(encoding="utf-8"),contents)
+        self.assertIn("Segundo error",(self.folder / "Error_Control_1.txt").read_text(encoding="utf-8"))
 
     def test_unwritable_output_falls_back_to_source_folder(self):
         blocked = self.folder / "not-a-directory"
@@ -58,7 +58,7 @@ class DiagnosticTests(unittest.TestCase):
             panel.start()
             shown.assert_called_once()
         self.assertFalse(panel.busy)
-        self.assertIn("tabla está vacía",(self.folder / "Error_Control.txt").read_text())
+        self.assertIn("tabla está vacía",(self.folder / "Error_Control.txt").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
