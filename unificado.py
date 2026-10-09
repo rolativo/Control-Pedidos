@@ -8,9 +8,10 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from control import ControlError
-from etiquetas import bundle_zip, bundle_files, parse_table
-from generador import prepare_generator
+from etiquetas import bundle_zip, bundle_files, parse_table, copy_to_nas
+from generador import prepare_generator, prepare_shortcut
 from diagnostico import record_error
+from tema import image, INPUT, TEXT, LIME, PURPLE
 
 
 class BundlePanel:
@@ -22,7 +23,11 @@ class BundlePanel:
         self.events = queue.Queue()
         frame = ttk.Frame(parent, padding=18)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Control y etiquetas", font=("Segoe UI", 19, "bold")).pack(anchor="w")
+        heading = ttk.Frame(frame)
+        heading.pack(fill="x")
+        ttk.Label(heading, text="Control y etiquetas", font=("Segoe UI", 19, "bold")).pack(side="left")
+        self.generator = GeneratorLauncher(root, heading, open_path)
+        self.generator.button.pack(side="right")
         ttk.Label(frame, text="Elige el ZIP de Mercado Libre y pega las tres columnas: "
                   "Pack ID o Venta, Cantidad y SKU.", wraplength=900).pack(anchor="w", pady=(4, 12))
         selectors = ttk.Frame(frame)
@@ -49,10 +54,15 @@ class BundlePanel:
         self.buttons.append(clear)
         ttk.Label(paste_bar, text="Copia las tres columnas desde Excel o desde la tabla del chat.").pack(side="left", padx=6)
         self.text = ScrolledText(frame, height=13, font=("Consolas", 10), wrap="none", undo=True)
+        self.text.configure(background=INPUT, foreground=TEXT, insertbackground=LIME,
+                            selectbackground=PURPLE, selectforeground=TEXT, relief="flat",
+                            highlightthickness=1, highlightbackground=PURPLE, highlightcolor=LIME)
+        self.text.vbar.configure(background=PURPLE, troughcolor=INPUT, activebackground=LIME)
         self.text.pack(fill="both", expand=True, pady=8)
         actions = ttk.Frame(frame)
         actions.pack(fill="x")
-        self.generate = ttk.Button(actions, text="Generar PDF y etiquetas", command=self.start)
+        self.generate = ttk.Button(actions, text="Generar PDF y etiquetas", command=self.start,
+                                   style="Accent.TButton")
         self.generate.pack(side="left")
         self.buttons.append(self.generate)
         self.open_buttons = []
@@ -117,7 +127,7 @@ class BundlePanel:
             return
         self.text.delete("1.0", "end")
         self.text.insert("1.0", text)
-        self.status.set(f"Tabla pegada: {len(rows)} filas. Las cantidades de esta tabla se usarán en las etiquetas.")
+        self.status.set(f"Tabla pegada: {len(rows)} filas. Se usarán tus SKU y cantidades en las etiquetas.")
 
     def start(self):
         if self.busy:
@@ -142,7 +152,7 @@ class BundlePanel:
             try:
                 result = (bundle_zip(source_zip, table, output) if source_zip else
                           bundle_files(source_pdf, source_txt, table, output))
-                self.events.put((True, result))
+                self.events.put((True, copy_to_nas(result)))
             except ControlError as exc:
                 self.events.put((False, record_error(str(exc), source_zip or source_pdf, output, exc)))
             except Exception as exc:
@@ -164,7 +174,15 @@ class BundlePanel:
                 message = f"Listo: {result.orders} pedidos, {result.labels} etiquetas y {result.pages} hojas de control."
                 if result.unused_rows:
                     message += f" {result.unused_rows} filas de la tabla no aparecen en el PDF; están en Ver revisión."
+                if result.differences:
+                    message += " Se usaron los SKU y cantidades que pegaste."
+                if result.nas_copy:
+                    message += "\nCopia del TXT: " + result.nas_copy
                 self.status.set(message + "\n" + str(result.folder))
+                if result.nas_warning:
+                    self.status.set(message + "\n" + result.nas_warning + "\n" + str(result.folder))
+                    messagebox.showwarning("Archivos generados · Copia no disponible",
+                                           result.nas_warning, parent=self.root)
             else:
                 self.status.set(result)
                 messagebox.showerror("No se generó el conjunto", result, parent=self.root)
@@ -183,49 +201,23 @@ class BundlePanel:
             self.open_path(getattr(self.result, key))
 
 
-class GeneratorPanel:
+class GeneratorLauncher:
     def __init__(self, root, parent, open_path):
-        self.open_path = open_path
+        self.root, self.open_path = root, open_path
         self.folder = Path.home() / "Documents" / "ControlPedidos"
         self.bat = None
-        frame = ttk.Frame(parent, padding=22)
-        frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Generador de Excel", font=("Segoe UI", 19, "bold")).pack(anchor="w")
-        ttk.Label(frame, text="Copia los datos de tu tabla dinámica y pulsa Abrir Generador.\n"
-                  "Se abrirá tu BAT original, que lee el portapapeles y crea los archivos PMC y AHK.",
-                  wraplength=870).pack(anchor="w", pady=(12, 18))
-        buttons = ttk.Frame(frame)
-        buttons.pack(anchor="w")
-        ttk.Button(buttons, text="Abrir Generador", command=self.launch).pack(side="left")
-        ttk.Button(buttons, text="Elegir carpeta", command=self.choose).pack(side="left", padx=8)
-        ttk.Button(buttons, text="Abrir carpeta", command=self.explore).pack(side="left")
-        self.status = tk.StringVar(value="Los archivos del Generador se guardarán en: " + str(self.folder / "Generador"))
-        ttk.Label(frame, textvariable=self.status, wraplength=870).pack(anchor="w", pady=15)
-        ttk.Label(frame, text="Este botón abre el Generador. Los AHK y PMC que produzca se usan "
-                  "con los mismos programas que ya utilizas.", wraplength=870).pack(anchor="w")
-
-    def choose(self):
-        selected = filedialog.askdirectory(title="Carpeta para los archivos del Generador")
-        if selected:
-            self.folder = Path(selected)
-            self.bat = None
-            self.status.set("Carpeta elegida: " + selected)
+        self.mask = image(root, "mask.png", 6)
+        self.button = ttk.Button(parent, text="Generador de Excel", image=self.mask, compound="left",
+                                 style="Generator.TButton", command=self.launch)
 
     def launch(self):
         if sys.platform != "win32":
-            self.status.set("El BAT del Generador se abre en Windows.")
+            messagebox.showinfo("Generador de Excel", "El BAT del Generador se abre en Windows.", parent=self.root)
             return
         try:
             self.bat = prepare_generator(self.folder)
+            prepare_shortcut(self.bat)
             self.open_path(self.bat)
-            self.status.set("Generador abierto. Sus archivos se guardarán en: " + str(self.bat.parent))
         except (ControlError, OSError) as exc:
-            self.status.set(str(exc))
-
-    def explore(self):
-        try:
-            if not self.bat:
-                self.bat = prepare_generator(self.folder)
-            self.open_path(self.bat.parent)
-        except (ControlError, OSError) as exc:
-            self.status.set(str(exc))
+            messagebox.showerror("No se pudo abrir el Generador",
+                                 record_error(str(exc), output=self.folder, exception=exc), parent=self.root)

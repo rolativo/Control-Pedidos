@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import os
 from pathlib import Path
 import queue
@@ -32,14 +33,6 @@ class Application:
         self.errors: dict[str, str] = {}
         self.busy = False
         self.folder: Path | None = None
-        root.title("Control de pedidos · Mercado Libre")
-        root.geometry("880x530")
-        root.minsize(700, 420)
-        style = ttk.Style()
-        if "vista" in style.theme_names():
-            style.theme_use("vista")
-        style.configure("TButton", padding=8)
-        style.configure("Treeview", rowheight=28)
         frame = ttk.Frame(container if container is not None else root, padding=20)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="Control de pedidos", font=("Segoe UI", 20, "bold")).pack(anchor="w")
@@ -183,7 +176,7 @@ def main():
     args = parser.parse_args()
     if args.sin_ventana:
         if args.zip_path or args.txt:
-            from etiquetas import bundle_zip, bundle_files
+            from etiquetas import bundle_zip, bundle_files, copy_to_nas
             if not args.tabla:
                 parser.error("Selecciona el archivo de tabla con --tabla.")
             if args.txt and len(args.files) != 1:
@@ -193,8 +186,11 @@ def main():
                 result = (bundle_zip(Path(args.zip_path), table, Path(args.salida) if args.salida else None)
                           if args.zip_path else bundle_files(Path(args.files[0]), Path(args.txt), table,
                           Path(args.salida) if args.salida else None))
+                copy_to_nas(result)
                 if sys.stdout:
                     print(result.folder)
+                    if result.nas_warning:
+                        print(result.nas_warning)
                 return 0
             except Exception as exc:
                 message = record_error(str(exc), args.zip_path or args.files[0], args.salida, exc)
@@ -215,22 +211,28 @@ def main():
                     print(f"ERROR: {message}", file=sys.stderr)
                 failed = True
         return 1 if failed else 0
+    root = create_window(args)
+    root.mainloop()
+    return 0
+
+
+def create_window(args=None):
+    if args is None:
+        args = argparse.Namespace(files=[], txt=None, zip_path=None, tabla=None, salida=None)
     root = tk.Tk()
     install_handlers(root)
-    from unificado import BundlePanel, GeneratorPanel
+    from tema import apply_theme
+    apply_theme(root)
+    from unificado import BundlePanel
     notebook = ttk.Notebook(root)
     notebook.pack(fill="both", expand=True)
-    control_tab, bundle_tab, generator_tab = [ttk.Frame(notebook) for _ in range(3)]
+    bundle_tab, control_tab = [ttk.Frame(notebook) for _ in range(2)]
+    notebook.add(bundle_tab, text="Principal")
     notebook.add(control_tab, text="Solo control PDF")
-    notebook.add(bundle_tab, text="Control y etiquetas")
-    notebook.add(generator_tab, text="Generador de Excel")
     initial_pdfs = [f for f in args.files if Path(f).suffix.lower() == ".pdf"] if not args.txt else []
     app = Application(root, initial_pdfs, control_tab)
     panel = BundlePanel(root, bundle_tab, open_path)
-    generator = GeneratorPanel(root, generator_tab, open_path)
-    root.geometry("1000x720")
-    root.minsize(960, 660)
-    root.title("Control de pedidos · PDF, etiquetas y Generador")
+    root.notebook, root.bundle_panel, root.control_panel = notebook, panel, app
     zipped = args.zip_path or next((f for f in args.files if Path(f).suffix.lower() == ".zip"), None)
     if zipped:
         panel.source_zip = Path(zipped)
@@ -252,11 +254,11 @@ def main():
         app.location.set("Se guardará en: " + args.salida)
         panel.output_root = Path(args.salida)
         panel.folder_status.set("Los resultados se guardarán en: " + args.salida)
-    root.mainloop()
-    return 0
+    return root
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     try:
         code = main()
     except Exception as exc:

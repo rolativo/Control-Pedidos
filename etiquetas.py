@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import math
 from pathlib import Path, PurePosixPath
@@ -35,6 +35,7 @@ class LabelResult:
     labels: list[LabelInfo]
     configuration_blocks: int
     unused_rows: list[TableRow]
+    differences: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -47,6 +48,9 @@ class BundleResult:
     labels: int
     pages: int
     unused_rows: int
+    differences: int = 0
+    nas_copy: str | None = None
+    nas_warning: str | None = None
 
 
 def parse_table(text: str) -> list[TableRow]:
@@ -173,20 +177,18 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow]) -> La
             table_by_order[order_ids[row.identifier][0]].append(row)
         else:
             unused.append(row)
+    differences = []
     for number, order in enumerate(orders, 1):
+        if not table_by_order[number]:
+            raise ControlError(f"Falta la tabla del pedido {number:02d}: copia sus filas usando "
+                               "su Pack ID o Venta. No se generó el conjunto.")
         expected = Counter(p.sku for p in order.products if p.sku is not None)
         actual = Counter(row.sku for row in table_by_order[number])
-        unknown = sum(p.sku is None for p in order.products)
-        if expected - actual or sum((actual - expected).values()) != unknown:
-            missing = list((expected - actual).elements())
-            extra = list((actual - expected).elements())
-            detail = ("faltan " + ", ".join(missing) if missing else "")
-            if extra:
-                detail += ("; " if detail else "") + "sobran " + ", ".join(extra)
-            if unknown:
-                detail += ("; " if detail else "") + (f"el PDF tiene {unknown} producto(s) sin SKU; "
-                          "incluye también sus filas en la tabla")
-            raise ControlError(f"Tabla del pedido {number:02d}: {detail}. No se generó el conjunto.")
+        if expected != actual or any(p.sku is None for p in order.products):
+            differences.append(f"{number:02d} | SKU del PDF: "
+                               + ", ".join(p.sku or "(no existe en origen)" for p in order.products)
+                               + " | Datos usados en la etiqueta: "
+                               + " /".join(f"{row.quantity}/{row.sku}" for row in table_by_order[number]))
     matches = list(BLOCK.finditer(text))
     if not matches or len(matches) != text.count("^XA") or len(matches) != text.count("^XZ"):
         raise ControlError("El TXT no contiene bloques ZPL completos y reconocibles.")
@@ -225,7 +227,7 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow]) -> La
     if seen != expected_orders:
         missing = ", ".join(f"{i:02d}" for i in sorted(expected_orders - seen))
         raise ControlError(f"Faltan etiquetas para los pedidos: {missing}. No se generó el conjunto.")
-    return LabelResult("".join(output), labels, configuration, unused)
+    return LabelResult("".join(output), labels, configuration, unused, differences)
 
 
 MAX_PDF = 50 * 1024 * 1024
@@ -296,6 +298,9 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
                       "Cantidades de las etiquetas: las de la tabla copiada.", "",
                       "COINCIDENCIAS"]
             report.extend(f"{label.number:02d} | {label.identifier} | {label.text}" for label in labels.labels)
+            report.extend(["", "DIFERENCIAS DE SKU (NO IMPIDEN GENERAR)",
+                           "La tabla pegada tiene prioridad para SKU y cantidades de las etiquetas."])
+            report.extend(labels.differences)
             report.extend(["", "PRODUCTOS SIN SKU EN EL PDF ORIGINAL"])
             report.extend(f"{number:02d} | {product.description} | "
                           "Conservado sin SKU en el control. La fila adicional de la tabla "
@@ -325,7 +330,7 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
             return BundleResult(final_folder, final_folder / pdf_path.name,
                                 final_folder / "Etiquetas" / txt_name,
                                 final_folder / report_path.name, len(orders),
-                                len(labels.labels), pages, len(labels.unused_rows))
+                                len(labels.labels), pages, len(labels.unused_rows), len(labels.differences))
         except Exception:
             if final_folder:
                 shutil.rmtree(final_folder)
@@ -345,3 +350,20 @@ def bundle_files(pdf: Path, txt: Path, table: str, output_root: Path | None = No
     if pdf.stat().st_size > MAX_PDF or txt.stat().st_size > MAX_TEXT:
         raise ControlError("El PDF o TXT supera el tamaño admitido.")
     return bundle(pdf.read_bytes(), txt.read_bytes(), table, output_root or pdf.parent, pdf.name, txt.name)
+
+
+def copy_to_nas(result: BundleResult) -> BundleResult:
+    from respaldo import backup_labels, CopyResult
+    try:
+        copied = backup_labels(result.labels_file)
+    except Exception:
+        copied = CopyResult(warning="No se pudo entrar a la carpeta de impresiones. "
+                            "El PDF y el TXT se generaron correctamente en la carpeta de salida.")
+    result.nas_copy = copied.path
+    result.nas_warning = copied.warning
+    try:
+        with result.report.open("a", encoding="utf-8") as stream:
+            stream.write("\nCOPIA DEL TXT AL NAS\n" + (copied.path or copied.warning or "") + "\n")
+    except OSError:
+        pass
+    return result

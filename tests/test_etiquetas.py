@@ -138,12 +138,35 @@ class LabelTests(unittest.TestCase):
         self.assertNotIn("FUNDA-TABLA",text)
         self.assertNotIn("None",text)
 
-    def test_absent_pdf_sku_does_not_hide_mismatches_of_known_skus(self):
+    def test_table_has_priority_even_when_known_skus_or_row_count_differ(self):
         self.order.products.append(Product(None,1,"Funda sin SKU"))
         for rows in [self.rows, [TableRow(self.order.pack_id,1,"ERROR")],
                      self.rows + [TableRow(self.order.pack_id,1,"B"),TableRow(self.order.pack_id,1,"C")]]:
-            with self.subTest(rows=rows), self.assertRaises(ControlError):
-                transform_labels(label(),[self.order],rows)
+            with self.subTest(rows=rows):
+                result = transform_labels(label(),[self.order],rows)
+                self.assertEqual(result.labels[0].text," /".join(f"{r.quantity}/{r.sku}" for r in rows))
+                self.assertEqual(len(result.differences),1)
+
+    def test_100_smen40ne_replaces_label_data_but_not_pdf_sku_or_quantity(self):
+        fixture(self.pdf,[entries(products=[("SMEN40NE-100","1","100 Toallas faciales",[])])])
+        self.txt.write_text(label(),encoding="utf-8")
+        result = bundle_files(self.pdf,self.txt,"/2000018000000001\t100\tSMEN40NE",self.output)
+        self.assertIn("^FD100/SMEN40NE^FS",result.labels_file.read_text(encoding="utf-8"))
+        with fitz.open(result.pdf) as doc:
+            text = doc[0].get_text()
+        self.assertIn("SMEN40NE-100",text)
+        self.assertIn("×1",text)
+        self.assertNotIn("×100",text)
+        self.assertEqual(result.differences,1)
+        self.assertIn("100/SMEN40NE",result.report.read_text(encoding="utf-8"))
+
+    def test_changed_sku_still_requires_correct_order_id_and_preserves_shipping_fields(self):
+        original = label()
+        changed = transform_labels(original,[self.order],[TableRow(self.order.sale,100,"OTRO-SKU")])
+        fields = Counter(re.findall(r"\^FD(.*?)\^FS",original,re.S))
+        self.assertFalse(fields - Counter(re.findall(r"\^FD(.*?)\^FS",changed.text,re.S)))
+        with self.assertRaises(ControlError):
+            transform_labels(original,[self.order],[TableRow("2000018000000099",100,"OTRO-SKU")])
 
     def test_zip_without_extracting_member_paths(self):
         fixture(self.pdf, [entries()])

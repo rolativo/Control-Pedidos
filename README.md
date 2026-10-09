@@ -1,4 +1,4 @@
-# Control de pedidos: PDF, etiquetas y Generador
+# El todo poderOSO
 
 Un programa de escritorio en español para generar el control compacto de
 Mercado Libre, agregar datos a sus etiquetas ZPL y abrir el Generador de Excel.
@@ -10,7 +10,7 @@ procesan en la computadora; no se envían a GitHub ni a otro servicio.
 
 1. Copia tres columnas: **Pack ID o Venta, Cantidad y SKU**. Puede ser una tabla
    de Excel o una tabla del chat. Se acepta la diagonal delante del ID.
-2. En la pestaña **Control y etiquetas**, pulsa **Seleccionar ZIP** y elige el
+2. En la pestaña **Principal**, pulsa **Seleccionar ZIP** y elige el
    ZIP descargado de Mercado Libre que contiene el PDF y el TXT.
 3. Pulsa **Pegar tabla** y después **Generar PDF y etiquetas**.
 
@@ -26,8 +26,9 @@ seleccionado o en la carpeta de salida que elijas. Contiene:
   procedimiento de impresión que ya utilizas.
 - `Revision.txt`: coincidencias y filas de la tabla que no se utilizaron.
 
-La generación es conjunta: si falta un pedido, un SKU o una etiqueta, o si un
-identificador no se puede leer, no se publica un conjunto nuevo. Los originales
+La generación es conjunta: si falta la tabla de un pedido o una etiqueta, o si un
+identificador no se puede leer, no se publica un conjunto nuevo. Un SKU distinto
+entre el PDF y la tabla no impide generar: se usa lo que pegaste en la etiqueta. Los originales
 y los resultados anteriores no se sobrescriben.
 
 ### Cantidades
@@ -48,7 +49,10 @@ y descripciones diferentes siguen siendo dos renglones.
   coordenadas. Los fragmentos impresos dos veces se cuentan una sola vez.
 - Los bloques de configuración como `^XA^MCY^XZ` se conservan sin numerarse.
 - Si las etiquetas están en otro orden, mantienen el número del pedido correcto.
-- Se verifica que los SKU de la tabla coincidan con los del pedido.
+- Los SKU y cantidades de la tabla pegada tienen prioridad para las etiquetas.
+  Las diferencias frente al PDF se registran en `Revision.txt` y no bloquean
+  la generación. Por ejemplo, `100/SMEN40NE` es válido aunque el PDF contenga
+  `SMEN40NE-100 ×1`. El PDF conserva siempre sus datos originales.
 - Una fila de la tabla con un ID que no está en el PDF se registra como no
   utilizada. No se añade a otro pedido.
 - Se conservan los códigos de barras, QR, destinatarios y campos de envío.
@@ -86,12 +90,6 @@ en la carpeta de salida, junto al original o en una carpeta local de respaldo.
 La ventana indica la ruta. También se registran errores al pegar la tabla y
 errores inesperados de la interfaz o del inicio del EXE.
 
-En **Control y etiquetas**, la tabla debe incluir una fila por cada producto,
-también los que no tienen SKU en el PDF. Los SKU que sí aparecen en el PDF se
-verifican como antes. Para productos sin SKU en origen, la fila adicional se
-usa solamente en la etiqueta: no se agrega al control ni se presenta como una
-coincidencia verificada. Esta limitación queda indicada en `Revision.txt`.
-
 Se necesita un PDF con texto seleccionable y la tabla de identificación y
 productos. Un PDF escaneado, protegido, ilegible o con otra estructura se
 rechaza; esta versión no utiliza OCR.
@@ -99,7 +97,7 @@ rechaza; esta versión no utiliza OCR.
 ## Generador de Excel
 
 1. Copia los datos de tu tabla dinámica como lo haces habitualmente.
-2. En **Generador de Excel**, pulsa **Abrir Generador**.
+2. En **Principal**, pulsa el botón **Generador de Excel**, con la máscara.
 
 El botón abre el BAT y el PowerShell originales entregados por el usuario. Se
 incluyen dentro del EXE y se copian a una carpeta permanente para que sus salidas
@@ -107,9 +105,7 @@ no desaparezcan al cerrar el programa. Se corrige únicamente la correspondencia
 de nombres: `GENERADOR.bat` llama a `Generador.ps1`.
 
 El Generador lee el portapapeles y produce los mismos archivos `lista.pmc`,
-`f5.ahk`, `f11.ahk` o `f511.ahk`, según sus reglas originales. La carpeta de salida
-se muestra en la ventana y puede elegirse con **Elegir carpeta**. De forma
-predeterminada se usa `Documents/ControlPedidos/Generador` del usuario.
+`f5.ahk`, `f11.ahk` o `f511.ahk`, según sus reglas originales. Se usa `Documents/ControlPedidos/Generador` del usuario.
 
 Este botón crea los archivos; para utilizarlos se requieren los mismos programas
 que ya usas para AHK y PMC. No los ejecuta automáticamente.
@@ -117,8 +113,8 @@ que ya usas para AHK y PMC. No los ejecuta automáticamente.
 ## Obtener el EXE con GitHub
 
 En **Actions** (Acciones), abre una ejecución correcta de **Crear programa para
-Windows** y descarga **Control_Pedidos_Windows** desde **Artifacts** (Archivos
-generados). Extrae el ZIP y abre `Control_Pedidos.exe`.
+Windows** y descarga **El_todo_poderOSO_Windows** desde **Artifacts** (Archivos
+generados). Extrae el ZIP y abre `El_todo_poderOSO.exe`.
 
 El flujo se ejecuta al subir cambios a `main` o `master`, o manualmente con
 **Run workflow** (Ejecutar flujo de trabajo). Los artefactos se conservan 30 días
@@ -147,8 +143,8 @@ Construcción del ejecutable en Windows:
 
 ```bash
 python -m pip install -r requirements-build.txt
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name Control_Pedidos --collect-data reportlab --add-data "tools:tools" app.py
-python tests/smoke_windows.py dist/Control_Pedidos.exe
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name El_todo_poderOSO --icon assets/app.ico --collect-data reportlab --add-data "tools:tools" --add-data "assets:assets" app.py
+python tests/smoke_windows.py dist/El_todo_poderOSO.exe
 ```
 
 Las pruebas cubren los controles PDF, tablas copiadas, Pack ID y Venta
@@ -156,3 +152,23 @@ fragmentados, configuración ZPL, orden de etiquetas, protección de archivos,
 conservación de códigos de envío y preparación del Generador. GitHub también
 ejecuta una prueba del EXE empaquetado que genera un PDF y un TXT a partir de un
 ZIP sintético. Los documentos reales de prueba no se incluyen en el código.
+
+## Diseño y copia del TXT
+
+El programa usa morado, verde lima y tonos oscuros. El icono del EXE es la
+cabeza sin círculo y con transparencia. La máscara transparente aparece en el
+botón del Generador, directamente en Principal; no tiene otra pestaña. Al abrir
+el Generador también se intenta crear un acceso directo con esa máscara en su
+carpeta, sin cambiar los archivos BAT y PowerShell originales.
+
+El TXT se guarda localmente como antes y se intenta copiar, en este orden, a:
+
+1. `\\WD-NAS\Public\impresiones`
+2. `\\10.10.1.220\Public\impresiones`
+
+La copia se llama `YYYY-MM-DD_HH-MM-SS.txt`, con fecha y hora locales de la
+computadora. Si ya existe, se agrega un sufijo para no sobrescribirla. Solo se
+copia el TXT. Cada intento de red tiene tiempo limitado para que una carpeta
+que no responde no deje esperando indefinidamente. Si fallan ambas direcciones,
+se conserva el resultado local completo y aparece un aviso; no es un error de
+generación. La ruta de la copia o el aviso quedan en `Revision.txt`.
