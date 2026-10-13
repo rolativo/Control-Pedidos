@@ -35,7 +35,7 @@ try:
         root.geometry(f"{width}x{height}")
         root.update()
         for widget in [generator.button,generator.folder_button,root.bundle_panel.generate,root.bundle_panel.text]:
-            assert widget.winfo_ismapped()
+            assert widget.winfo_ismapped(), f"Widget no visible: {widget} en {width}x{height}"
             assert widget.winfo_rootx()+widget.winfo_width() <= root.winfo_rootx()+root.winfo_width()+1
             assert widget.winfo_rooty()+widget.winfo_height() <= root.winfo_rooty()+root.winfo_height()+1
         assert generator.folder_button.winfo_rooty() >= generator.button.winfo_rooty()+generator.button.winfo_height()

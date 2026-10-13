@@ -58,9 +58,7 @@ class BundlePanel:
                             selectbackground=PURPLE, selectforeground=TEXT, relief="flat",
                             highlightthickness=1, highlightbackground=PURPLE, highlightcolor=LIME)
         self.text.vbar.configure(background=PURPLE, troughcolor=INPUT, activebackground=LIME)
-        self.text.pack(fill="both", expand=True, pady=8)
         actions = ttk.Frame(frame)
-        actions.pack(fill="x")
         self.generate = ttk.Button(actions, text="Generar PDF y etiquetas", command=self.start,
                                    style="Accent.TButton")
         self.generate.pack(side="left")
@@ -73,7 +71,9 @@ class BundlePanel:
             button.pack(side="left", padx=(6, 0))
             self.open_buttons.append(button)
         self.status = tk.StringVar(value="Listo para seleccionar archivos y pegar la tabla.")
-        ttk.Label(frame, textvariable=self.status, wraplength=900).pack(anchor="w", pady=(10, 0))
+        ttk.Label(frame, textvariable=self.status, wraplength=900).pack(side="bottom", fill="x", anchor="w", pady=(10, 0))
+        actions.pack(side="bottom", fill="x")
+        self.text.pack(fill="both", expand=True, pady=8)
         self.root.after(100, self.poll)
 
     def update_source(self):
