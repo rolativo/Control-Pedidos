@@ -44,6 +44,11 @@ def apply_theme(root):
     style.map("Accent.TButton", background=[("disabled", SURFACE), ("pressed", "#99C600"),
               ("active", "#D7FF60")], foreground=[("disabled", "#8A769F"), ("!disabled", BG)])
     style.configure("Generator.TButton", padding=(12, 4), font=("Segoe UI", 10, "bold"))
+    style.layout("Link.TButton", [("Button.label", {"sticky": "nswe"})])
+    style.configure("Link.TButton", background=BG, foreground=LIME, padding=(6, 2),
+                    font=("Segoe UI", 10, "underline"))
+    style.map("Link.TButton", background=[("active", BG), ("pressed", BG)],
+              foreground=[("active", TEXT)])
     style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(18, 4, 18, 0))
     style.configure("TNotebook.Tab", background=SURFACE, foreground=MUTED, padding=(18, 10))
     style.map("TNotebook.Tab", background=[("selected", LIME), ("active", PURPLE)],

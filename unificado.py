@@ -11,7 +11,7 @@ from control import ControlError
 from etiquetas import bundle_zip, bundle_files, parse_table, copy_to_nas
 from generador import prepare_generator, prepare_shortcut
 from diagnostico import record_error
-from tema import image, INPUT, TEXT, LIME, PURPLE
+from tema import image, BG, INPUT, TEXT, LIME, PURPLE
 
 
 class BundlePanel:
@@ -27,7 +27,7 @@ class BundlePanel:
         heading.pack(fill="x")
         ttk.Label(heading, text="Control y etiquetas", font=("Segoe UI", 19, "bold")).pack(side="left")
         self.generator = GeneratorLauncher(root, heading, open_path)
-        self.generator.button.pack(side="right")
+        self.generator.frame.pack(side="right")
         ttk.Label(frame, text="Elige el ZIP de Mercado Libre y pega las tres columnas: "
                   "Pack ID o Venta, Cantidad y SKU.", wraplength=900).pack(anchor="w", pady=(4, 12))
         selectors = ttk.Frame(frame)
@@ -206,9 +206,15 @@ class GeneratorLauncher:
         self.root, self.open_path = root, open_path
         self.folder = Path.home() / "Documents" / "ControlPedidos"
         self.bat = None
-        self.mask = image(root, "mask.png", 6)
-        self.button = ttk.Button(parent, text="Generador de Excel", image=self.mask, compound="left",
-                                 style="Generator.TButton", command=self.launch)
+        self.frame = ttk.Frame(parent)
+        self.mask = image(root, "mask.png", 2)
+        self.button = tk.Button(self.frame, text="", image=self.mask, command=self.launch,
+                                background=BG, activebackground=BG, borderwidth=0,
+                                highlightthickness=0, padx=0, pady=0, cursor="hand2")
+        self.button.pack(anchor="center")
+        self.folder_button = ttk.Button(self.frame, text="Carpeta", style="Link.TButton",
+                                        command=self.explore, cursor="hand2")
+        self.folder_button.pack(anchor="center", pady=(2, 0))
 
     def launch(self):
         if sys.platform != "win32":
@@ -220,4 +226,13 @@ class GeneratorLauncher:
             self.open_path(self.bat)
         except (ControlError, OSError) as exc:
             messagebox.showerror("No se pudo abrir el Generador",
+                                 record_error(str(exc), output=self.folder, exception=exc), parent=self.root)
+
+    def explore(self):
+        try:
+            if not self.bat or not self.bat.parent.is_dir():
+                self.bat = prepare_generator(self.folder)
+            self.open_path(self.bat.parent)
+        except (ControlError, OSError) as exc:
+            messagebox.showerror("No se pudo abrir la carpeta",
                                  record_error(str(exc), output=self.folder, exception=exc), parent=self.root)

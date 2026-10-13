@@ -157,7 +157,10 @@ ZIP sintético. Los documentos reales de prueba no se incluyen en el código.
 
 El programa usa morado, verde lima y tonos oscuros. El icono del EXE es la
 cabeza sin círculo y con transparencia. La máscara transparente aparece en el
-botón del Generador, directamente en Principal; no tiene otra pestaña. Al abrir
+botón del Generador, directamente en Principal; no tiene otra pestaña. El botón
+muestra solo la máscara, ampliada aproximadamente a una pulgada, sin texto.
+Debajo, el enlace `Carpeta` abre la carpeta de salida del Generador, incluso
+antes de ejecutarlo. Al abrir
 el Generador también se intenta crear un acceso directo con esa máscara en su
 carpeta, sin cambiar los archivos BAT y PowerShell originales.
 
@@ -172,3 +175,6 @@ copia el TXT. Cada intento de red tiene tiempo limitado para que una carpeta
 que no responde no deje esperando indefinidamente. Si fallan ambas direcciones,
 se conserva el resultado local completo y aparece un aviso; no es un error de
 generación. La ruta de la copia o el aviso quedan en `Revision.txt`.
+
+El lector admite tanto el encabezado `Productos` como `Producto`, que Mercado
+Libre utiliza cuando el control contiene un solo pedido.

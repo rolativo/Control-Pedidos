@@ -16,7 +16,8 @@ def main():
         folder = Path(directory)
         pdf = folder / "control.pdf"
         fixture(pdf, [entries(products=[("SMEN40NE-100","1","100 Toallas faciales",[])]) + [(261,170,"Funda sin SKU",True),
-                                  (261,182,"Cantidad: 1",False), (261,194,"Color: Gris",False)]])
+                                  (261,182,"Cantidad: 1",False), (261,194,"Color: Gris",False)]],
+                product_heading="Producto")
         archive = folder / "pedido.zip"
         with zipfile.ZipFile(archive, "w") as z:
             z.writestr("control.pdf", pdf.read_bytes())

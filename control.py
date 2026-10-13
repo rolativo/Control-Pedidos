@@ -80,7 +80,7 @@ OPAQUE = re.compile(r"^[A-Z0-9-]{10,}$")
 
 
 def page_sections(lines: list[Line], page_number: int):
-    headings = [l for l in lines if l.text.casefold() == "productos"]
+    headings = [l for l in lines if l.text.casefold() in ("producto", "productos")]
     if len(headings) != 1:
         raise ControlError(f"Página {page_number}: no se reconoce la tabla de pedidos. "
                            "No se generó un archivo nuevo.")

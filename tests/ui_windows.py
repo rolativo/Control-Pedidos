@@ -15,6 +15,9 @@ try:
     assert [root.notebook.tab(tab,"text") for tab in root.notebook.tabs()] == ["Principal","Solo control PDF"]
     generator = root.bundle_panel.generator
     assert generator.button.winfo_ismapped()
+    assert generator.button.cget("text") == ""
+    assert generator.mask.width() == 128
+    assert generator.folder_button.cget("text") == "Carpeta"
     with patch("unificado.prepare_generator",return_value=Path("C:/prueba/GENERADOR.bat")) as prepare, \
          patch("unificado.prepare_shortcut") as shortcut, \
          patch.object(generator,"open_path") as opened:
@@ -22,13 +25,20 @@ try:
         prepare.assert_called_once()
         opened.assert_called_once_with(Path("C:/prueba/GENERADOR.bat"))
         shortcut.assert_called_once()
+    generator.bat = None
+    with patch("unificado.prepare_generator",return_value=Path("C:/prueba/GENERADOR.bat")) as prepare, \
+         patch.object(generator,"open_path") as opened:
+        generator.folder_button.invoke()
+        prepare.assert_called_once()
+        opened.assert_called_once_with(Path("C:/prueba"))
     for width,height in [(1040,800),(960,720)]:
         root.geometry(f"{width}x{height}")
         root.update()
-        for widget in [generator.button,root.bundle_panel.generate,root.bundle_panel.text]:
+        for widget in [generator.button,generator.folder_button,root.bundle_panel.generate,root.bundle_panel.text]:
             assert widget.winfo_ismapped()
             assert widget.winfo_rootx()+widget.winfo_width() <= root.winfo_rootx()+root.winfo_width()+1
             assert widget.winfo_rooty()+widget.winfo_height() <= root.winfo_rooty()+root.winfo_height()+1
+        assert generator.folder_button.winfo_rooty() >= generator.button.winfo_rooty()+generator.button.winfo_height()
     root.geometry("1040x800")
     root.update()
     bounds=(root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),

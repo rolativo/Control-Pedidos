@@ -8,13 +8,13 @@ import fitz
 from control import ControlError, Order, Product, convert, read_orders, render_pdf
 
 
-def fixture(path, pages):
+def fixture(path, pages, product_heading="Productos"):
     """PDF de prueba sintético; nunca contiene compradores reales."""
     doc = fitz.open()
     for entries in pages:
         page = doc.new_page(width=595, height=842)
         page.insert_text((30, 65), "Identificacion", fontname="hebo", fontsize=9)
-        page.insert_text((249, 65), "Productos", fontname="hebo", fontsize=9)
+        page.insert_text((249, 65), product_heading, fontname="hebo", fontsize=9)
         for x, y, text, bold in entries:
             page.insert_text((x, y), text, fontname="hebo" if bold else "helv", fontsize=8)
     doc.save(path)
@@ -55,6 +55,21 @@ class ConversionTests(unittest.TestCase):
                          [("MSLG45B-39", 4, "10 Servilletas"), ("MSLG45B-39", 1, "100 Servilletas")])
         result = convert(self.source, self.output)
         self.assertEqual((result.orders, result.products, result.units), (1, 2, 5))
+
+    def test_single_order_header_producto_is_valid_in_singular(self):
+        fixture(self.source,[entries(products=[("FP200EB","1","10 Fundas para almohada",[])])],
+                product_heading="Producto")
+        orders, pages = read_orders(self.source)
+        self.assertEqual((len(orders),pages),(1,1))
+        self.assertEqual(orders[0].products[0].sku,"FP200EB")
+        result = convert(self.source,self.output)
+        self.assertEqual((result.orders,result.products,result.units),(1,1,1))
+
+    def test_unrecognized_header_still_fails_without_publishing_a_pdf(self):
+        fixture(self.source,[entries()],product_heading="Otra tabla")
+        with self.assertRaises(ControlError):
+            convert(self.source,self.output)
+        self.assertFalse(self.output.exists())
 
     def test_variants_not_limited_to_a_fixed_whitelist(self):
         fixture(self.source, [entries(products=[("TMPBL", "1", "Toalla de prueba",
