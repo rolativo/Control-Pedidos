@@ -5,12 +5,13 @@ import re
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 import fitz
 
 from control import ControlError, Order, Product
 from etiquetas import (BLOCK, TableRow, bundle_files, bundle_zip, label_identifiers,
-                       parse_table, transform_labels)
+                       parse_table, transform_labels, MissingTableError)
 from generador import prepare_generator
 from test_control import fixture, entries
 
@@ -177,8 +178,9 @@ class LabelTests(unittest.TestCase):
         result = bundle_zip(archive, "/2000018000000001\t40\tSKU-A", self.output)
         self.assertTrue(result.pdf.exists())
         self.assertTrue(result.labels_file.exists())
-        second = bundle_zip(archive, "/2000018000000001\t40\tSKU-A", self.output)
+        second = bundle_zip(result.source_zip, "/2000018000000001\t40\tSKU-A", self.output)
         self.assertNotEqual(result.folder, second.folder)
+        self.assertEqual(second.source_zip,result.source_zip)
 
     def test_bundle_validation_failure_publishes_nothing(self):
         fixture(self.pdf, [entries()])
@@ -196,6 +198,98 @@ class LabelTests(unittest.TestCase):
         alternate = prepare_generator(self.folder)
         self.assertNotEqual(bat, alternate)
         self.assertEqual(bat.read_text(), "archivo modificado")
+
+    def test_missing_table_lists_actual_sales_and_pack_ids_for_all_missing_orders(self):
+        other = Order("2000019000000002",None,[Product("SKU-B",1,"Segundo")])
+        with self.assertRaises(MissingTableError) as caught:
+            transform_labels(label(),[self.order,other],[])
+        message = str(caught.exception)
+        for value in [self.order.sale,self.order.pack_id,other.sale,"SKU-A","SKU-B"]:
+            self.assertIn(value,message)
+        self.assertIn("no la fila de Excel",message)
+
+    def test_invalid_quantity_resolves_pack_id_to_sale_and_shows_exact_pasted_line(self):
+        fixture(self.pdf,[entries()])
+        self.txt.write_text(label(),encoding="utf-8")
+        pasted="/2000018000000001\tmal\tSKU-A"
+        with self.assertRaises(ControlError) as caught:
+            bundle_files(self.pdf,self.txt,pasted,self.output)
+        message = str(caught.exception)
+        self.assertIn("Venta: 2000019000000001",message)
+        self.assertIn("renglón 1",message)
+        self.assertIn(pasted,message)
+        self.assertNotIn("renglón 0",message)
+        self.assertFalse(self.output.exists())
+
+    def test_number_only_needs_no_rows_preserves_shipping_and_uses_pdf_order(self):
+        other = Order("2000019000000002","2000018000000002",[Product("SKU-B",1,"Segundo")])
+        original = label(other.pack_id)+"^XA^MCY^XZ"+label()
+        result = transform_labels(original,[self.order,other],[],only_numbers=True)
+        self.assertEqual([x.number for x in result.labels],[2,1])
+        self.assertNotIn("DATOS_PACK",result.text)
+        self.assertNotIn("SKU-A",result.text)
+        self.assertIn("^XA^MCY^XZ",result.text)
+        self.assertFalse(Counter(re.findall(r"\^FD(.*?)\^FS",original,re.S)) -
+                         Counter(re.findall(r"\^FD(.*?)\^FS",result.text,re.S)))
+
+    def test_number_only_removes_previously_added_skus_without_duplicating_numbers(self):
+        full = transform_labels(label(),[self.order],self.rows)
+        numbered = transform_labels(full.text,[self.order],[],only_numbers=True)
+        self.assertNotIn("40/SKU-A",numbered.text)
+        self.assertNotIn("DATOS_PACK",numbered.text)
+        self.assertEqual(numbered.text.count("NUMERO_CONSECUTIVO"),1)
+        self.assertIn("^FD>:99999999999^FS",numbered.text)
+
+    def test_number_only_still_rejects_a_label_for_another_sale(self):
+        with self.assertRaises(ControlError):
+            transform_labels(label("2000018000000099"),[self.order],[],only_numbers=True)
+
+    def test_number_only_bundle_ignores_bad_table_and_keeps_pdf_products(self):
+        fixture(self.pdf,[entries()])
+        self.txt.write_text(label(),encoding="utf-8")
+        result = bundle_files(self.pdf,self.txt,"tabla que no se usa",self.output,only_numbers=True)
+        self.assertTrue(result.only_numbers)
+        self.assertNotIn("SKU-A",result.labels_file.read_text(encoding="utf-8"))
+        with fitz.open(result.pdf) as pdf:
+            self.assertIn("SKU-A",pdf[0].get_text())
+            self.assertIn("×2",pdf[0].get_text())
+
+    def make_zip(self):
+        fixture(self.pdf,[entries()])
+        archive = self.folder / "Original.zip"
+        with zipfile.ZipFile(archive,"w") as z:
+            z.writestr("Control.pdf",self.pdf.read_bytes())
+            z.writestr("etiquetas.txt",label())
+        return archive
+
+    def test_success_marks_original_zip_and_preserves_bytes_without_overwriting(self):
+        archive = self.make_zip()
+        data = archive.read_bytes()
+        existing = self.folder / "Surtido Original.zip"
+        existing.write_bytes(b"existing zip")
+        result = bundle_zip(archive,"",self.output,only_numbers=True)
+        self.assertFalse(archive.exists())
+        self.assertEqual(result.source_zip.name,"Surtido Original (2).zip")
+        self.assertEqual(result.source_zip.read_bytes(),data)
+        self.assertEqual(existing.read_bytes(),b"existing zip")
+
+    def test_failure_does_not_mark_or_modify_original_zip(self):
+        archive = self.make_zip()
+        data = archive.read_bytes()
+        with self.assertRaises(MissingTableError):
+            bundle_zip(archive,"2000018000000099\t1\tOTRO",self.output)
+        self.assertEqual(archive.read_bytes(),data)
+        self.assertFalse((self.folder / "Surtido Original.zip").exists())
+
+    def test_zip_rename_failure_does_not_cancel_completed_outputs(self):
+        archive = self.make_zip()
+        with patch("etiquetas.rename_processed_zip",side_effect=PermissionError("solo lectura")):
+            result = bundle_zip(archive,"",self.output,only_numbers=True)
+        self.assertTrue(result.pdf.exists())
+        self.assertTrue(result.labels_file.exists())
+        self.assertTrue(archive.exists())
+        self.assertIsNotNone(result.source_warning)
+        self.assertIn("no se pudo",result.report.read_text(encoding="utf-8"))
 
     def test_real_35_labels_if_provided(self):
         sample, table_path = os.environ.get("CONTROL_SAMPLE_ZPL"), os.environ.get("CONTROL_SAMPLE_TABLE")

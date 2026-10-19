@@ -178,3 +178,37 @@ generación. La ruta de la copia o el aviso quedan en `Revision.txt`.
 
 El lector admite tanto el encabezado `Productos` como `Producto`, que Mercado
 Libre utiliza cuando el control contiene un solo pedido.
+
+## Solo consecutivo y errores claros
+
+En Principal puedes marcar **Solo consecutivo (sin SKU ni cantidades)**.
+Este modo genera el mismo control PDF y agrega a cada guía únicamente su número
+correspondiente. No necesita tabla de Excel. Se siguen verificando los Pack ID,
+Ventas, etiquetas completas y coincidencias entre PDF y guías.
+
+En el modo habitual, si falta información de la tabla, el error enumera las
+Ventas y Pack ID de todos los pedidos afectados y sus SKU originales. Indica
+expresamente que el consecutivo del control no es una fila de Excel. Si un
+renglón pegado tiene una cantidad o SKU inválido, el error incluye el texto
+exacto y la Venta del PDF cuando se puede relacionar por su Pack ID.
+
+Desde ese aviso puedes aceptar generar solo con consecutivos; también puedes
+cerrarlo, corregir la tabla y generar con tus SKU y cantidades como antes.
+El archivo de error guarda la lista completa aunque el aviso en pantalla
+resuma una lista larga.
+
+Después de completar el PDF y el TXT, al ZIP original se le agrega **Surtido**
+al principio, por ejemplo `Surtido Etiqueta MercadoEnvios.zip`. No se cambian
+sus bytes, no se sobrescribe otro ZIP y el prefijo no se repite al procesarlo
+otra vez. Si el ZIP no puede renombrarse, los resultados locales se conservan
+y aparece un aviso. Un conjunto que falla antes de completarse no marca el ZIP.
+
+El Generador de la máscara abre automáticamente su carpeta después de crear
+los archivos PMC/AHK, antes de pedir ENTER para cerrar su ventana. La opción
+**Carpeta** permanece disponible para abrirla manualmente.
+
+En línea de comandos, el modo de guías sin tabla se activa con:
+
+```bash
+python app.py --sin-ventana --zip pedidos.zip --solo-consecutivo --salida controles
+```

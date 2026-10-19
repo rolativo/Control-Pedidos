@@ -8,10 +8,19 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from control import ControlError
-from etiquetas import bundle_zip, bundle_files, parse_table, copy_to_nas
+from etiquetas import (bundle_zip, bundle_files, parse_table, copy_to_nas,
+                       MissingTableError, TableRowError)
 from generador import prepare_generator, prepare_shortcut
 from diagnostico import record_error
 from tema import image, BG, INPUT, TEXT, LIME, PURPLE
+
+
+def error_preview(message):
+    lines = str(message).splitlines()
+    if len(lines) <= 20:
+        return str(message)
+    path = next((line for line in reversed(lines) if line.startswith("Archivo de error:")), "")
+    return "\n".join(lines[:16]) + "\n\nEl archivo de error contiene todos los pedidos.\n" + path
 
 
 class BundlePanel:
@@ -20,6 +29,7 @@ class BundlePanel:
         self.source_zip = self.source_pdf = self.source_txt = self.output_root = None
         self.result = None
         self.busy = False
+        self.only_numbers = tk.BooleanVar(value=False)
         self.events = queue.Queue()
         frame = ttk.Frame(parent, padding=18)
         frame.pack(fill="both", expand=True)
@@ -52,7 +62,10 @@ class BundlePanel:
         clear = ttk.Button(paste_bar, text="Limpiar tabla", command=self.clear)
         clear.pack(side="left", padx=6)
         self.buttons.append(clear)
-        ttk.Label(paste_bar, text="Copia las tres columnas desde Excel o desde la tabla del chat.").pack(side="left", padx=6)
+        self.numbers_option = ttk.Checkbutton(paste_bar, text="Solo consecutivo (sin SKU ni cantidades)",
+                                             variable=self.only_numbers, command=self.mode_changed)
+        self.numbers_option.pack(side="left", padx=6)
+        self.buttons.append(self.numbers_option)
         self.text = ScrolledText(frame, height=13, font=("Consolas", 10), wrap="none", undo=True)
         self.text.configure(background=INPUT, foreground=TEXT, insertbackground=LIME,
                             selectbackground=PURPLE, selectforeground=TEXT, relief="flat",
@@ -120,21 +133,29 @@ class BundlePanel:
     def paste(self):
         try:
             text = self.root.clipboard_get()
-            rows = parse_table(text)
-        except (tk.TclError, ControlError) as exc:
-            self.show_error(str(exc) if isinstance(exc, ControlError) else
-                            "El portapapeles no contiene texto. Copia las tres columnas primero.", exc)
+        except tk.TclError as exc:
+            self.show_error("El portapapeles no contiene texto. Copia las tres columnas primero.", exc)
             return
         self.text.delete("1.0", "end")
         self.text.insert("1.0", text)
-        self.status.set(f"Tabla pegada: {len(rows)} filas. Se usarán tus SKU y cantidades en las etiquetas.")
+        try:
+            rows = parse_table(text)
+            self.status.set(f"Tabla pegada: {len(rows)} filas. Se usarán tus SKU y cantidades en las etiquetas.")
+        except ControlError:
+            self.status.set("Texto pegado. Al generar se revisará la tabla y se indicará la Venta si hay un error.")
+
+    def mode_changed(self):
+        self.status.set("Las guías tendrán solo el consecutivo. No se necesita la tabla."
+                        if self.only_numbers.get() else "Las guías usarán los SKU y cantidades de la tabla pegada.")
 
     def start(self):
         if self.busy:
             return
         try:
             table = self.text.get("1.0", "end-1c")
-            parse_table(table)
+            only_numbers = self.only_numbers.get() if hasattr(self, "only_numbers") else False
+            if not only_numbers and not table.strip():
+                parse_table(table)
             if not self.source_zip and not (self.source_pdf and self.source_txt):
                 raise ControlError("Selecciona el ZIP, o selecciona el PDF y el TXT por separado.")
         except ControlError as exc:
@@ -150,11 +171,12 @@ class BundlePanel:
 
         def work():
             try:
-                result = (bundle_zip(source_zip, table, output) if source_zip else
-                          bundle_files(source_pdf, source_txt, table, output))
+                result = (bundle_zip(source_zip, table, output, only_numbers=only_numbers) if source_zip else
+                          bundle_files(source_pdf, source_txt, table, output, only_numbers=only_numbers))
                 self.events.put((True, copy_to_nas(result)))
             except ControlError as exc:
-                self.events.put((False, record_error(str(exc), source_zip or source_pdf, output, exc)))
+                self.events.put((False, (record_error(str(exc), source_zip or source_pdf, output, exc),
+                                        isinstance(exc, (MissingTableError, TableRowError)))))
             except Exception as exc:
                 self.events.put((False, record_error("No se pudo completar el conjunto: " + str(exc),
                                                      source_zip or source_pdf, output, exc)))
@@ -176,16 +198,31 @@ class BundlePanel:
                     message += f" {result.unused_rows} filas de la tabla no aparecen en el PDF; están en Ver revisión."
                 if result.differences:
                     message += " Se usaron los SKU y cantidades que pegaste."
+                if result.only_numbers:
+                    message += " Guías solo con consecutivo, sin SKU ni cantidades."
+                if result.source_zip:
+                    self.source_zip = result.source_zip
+                    self.update_source()
                 if result.nas_copy:
-                    message += "\nCopia del TXT: " + result.nas_copy
+                    message += "\nCopia del TXT guardada en el NAS."
                 self.status.set(message + "\n" + str(result.folder))
-                if result.nas_warning:
-                    self.status.set(message + "\n" + result.nas_warning + "\n" + str(result.folder))
-                    messagebox.showwarning("Archivos generados · Copia no disponible",
-                                           result.nas_warning, parent=self.root)
+                warnings = [w for w in (result.nas_warning, result.source_warning) if w]
+                if warnings:
+                    messagebox.showwarning("Archivos generados · Aviso",
+                                           "\n\n".join(warnings), parent=self.root)
             else:
-                self.status.set(result)
-                messagebox.showerror("No se generó el conjunto", result, parent=self.root)
+                can_use_numbers = False
+                if isinstance(result, tuple):
+                    result, can_use_numbers = result
+                self.status.set(result.splitlines()[0])
+                if can_use_numbers:
+                    if messagebox.askyesno("Faltan datos en la tabla", error_preview(result)
+                                           + "\n\n¿Generar las guías solo con consecutivo, sin SKU ni cantidades?",
+                                           parent=self.root):
+                        self.only_numbers.set(True)
+                        self.start()
+                else:
+                    messagebox.showerror("No se generó el conjunto", error_preview(result), parent=self.root)
         except queue.Empty:
             pass
         self.root.after(100, self.poll)
@@ -193,8 +230,8 @@ class BundlePanel:
     def show_error(self, message, exception=None):
         message = record_error(message, self.source_zip or self.source_pdf,
                                self.output_root, exception)
-        self.status.set(message)
-        messagebox.showerror("No se pudo continuar", message, parent=self.root)
+        self.status.set(message.splitlines()[0])
+        messagebox.showerror("No se pudo continuar", error_preview(message), parent=self.root)
 
     def open_result(self, key):
         if self.result:

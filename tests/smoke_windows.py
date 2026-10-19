@@ -28,6 +28,9 @@ def main():
                                  "--tabla", str(table), "--salida", str(folder / "salida")], timeout=90)
         if result.returncode:
             raise RuntimeError("El ejecutable no terminó correctamente.")
+        archive = folder / "Surtido pedido.zip"
+        if not archive.is_file():
+            raise RuntimeError("El ejecutable no agregó Surtido al ZIP original.")
         pdfs = list((folder / "salida").glob("*/Control_resumido.pdf"))
         texts = list((folder / "salida").glob("*/Etiquetas/*.txt"))
         if len(pdfs) != 1 or len(texts) != 1 or "^FD100/SMEN40NE /2/FUNDA-TABLA^FS" not in texts[0].read_text():
@@ -44,6 +47,14 @@ def main():
         logs = list(failed_output.glob("Error_Control*.txt"))
         if failure.returncode != 1 or len(logs) != 1 or list(failed_output.glob("**/*.pdf")):
             raise RuntimeError("El ejecutable no registró el fallo sin publicar un PDF.")
+        only_output = folder / "solo-numeros"
+        numbered = subprocess.run([str(executable), "--sin-ventana", "--zip", str(archive),
+                                   "--solo-consecutivo", "--salida", str(only_output)], timeout=90)
+        if numbered.returncode:
+            raise RuntimeError("El ejecutable no generó sin tabla en modo solo consecutivo.")
+        labels = list(only_output.glob("*/Etiquetas/*.txt"))[0].read_text(encoding="utf-8")
+        if "DATOS_PACK" in labels or "SMEN40NE" in labels or "NUMERO_CONSECUTIVO 01" not in labels:
+            raise RuntimeError("El modo solo consecutivo añadió un SKU o perdió el número.")
         print("Ejecutable probado: PDF y etiquetas generados correctamente.")
 
 

@@ -35,6 +35,8 @@ def apply_theme(root):
     style.configure("TFrame", background=BG)
     style.configure("TLabel", background=BG, foreground=TEXT)
     style.configure("Muted.TLabel", foreground=MUTED)
+    style.configure("TCheckbutton", background=BG, foreground=TEXT, padding=(3, 3))
+    style.map("TCheckbutton", background=[("active", BG)], foreground=[("active", LIME)])
     style.configure("Brand.TLabel", foreground=LIME, font=("Segoe UI", 25, "bold"))
     style.configure("TButton", background=PURPLE, foreground=TEXT, padding=(12, 9),
                     borderwidth=0, focusthickness=2, focuscolor=LIME)

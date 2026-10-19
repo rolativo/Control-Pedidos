@@ -173,24 +173,28 @@ def main():
     parser.add_argument("--zip", dest="zip_path", help="ZIP con el PDF y el TXT")
     parser.add_argument("--txt", help="TXT de etiquetas, para combinar con un PDF")
     parser.add_argument("--tabla", help="Archivo con las tres columnas copiadas")
+    parser.add_argument("--solo-consecutivo", action="store_true", help="Guías solo con número, sin tabla ni SKU")
     args = parser.parse_args()
     if args.sin_ventana:
         if args.zip_path or args.txt:
             from etiquetas import bundle_zip, bundle_files, copy_to_nas
-            if not args.tabla:
+            if not args.tabla and not args.solo_consecutivo:
                 parser.error("Selecciona el archivo de tabla con --tabla.")
             if args.txt and len(args.files) != 1:
                 parser.error("Selecciona un PDF para combinarlo con --txt.")
             try:
-                table = Path(args.tabla).read_text(encoding="utf-8-sig")
-                result = (bundle_zip(Path(args.zip_path), table, Path(args.salida) if args.salida else None)
+                table = Path(args.tabla).read_text(encoding="utf-8-sig") if args.tabla and not args.solo_consecutivo else ""
+                result = (bundle_zip(Path(args.zip_path), table, Path(args.salida) if args.salida else None,
+                                     only_numbers=args.solo_consecutivo)
                           if args.zip_path else bundle_files(Path(args.files[0]), Path(args.txt), table,
-                          Path(args.salida) if args.salida else None))
+                          Path(args.salida) if args.salida else None, only_numbers=args.solo_consecutivo))
                 copy_to_nas(result)
                 if sys.stdout:
                     print(result.folder)
                     if result.nas_warning:
                         print(result.nas_warning)
+                    if result.source_warning:
+                        print(result.source_warning)
                 return 0
             except Exception as exc:
                 message = record_error(str(exc), args.zip_path or args.files[0], args.salida, exc)
@@ -232,6 +236,7 @@ def create_window(args=None):
     initial_pdfs = [f for f in args.files if Path(f).suffix.lower() == ".pdf"] if not args.txt else []
     app = Application(root, initial_pdfs, control_tab)
     panel = BundlePanel(root, bundle_tab, open_path)
+    panel.only_numbers.set(getattr(args, "solo_consecutivo", False))
     root.notebook, root.bundle_panel, root.control_panel = notebook, panel, app
     zipped = args.zip_path or next((f for f in args.files if Path(f).suffix.lower() == ".zip"), None)
     if zipped:

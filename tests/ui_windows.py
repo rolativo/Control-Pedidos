@@ -1,11 +1,16 @@
 """Abrir y verificar la interfaz real de Windows, sin ejecutar el BAT."""
 from pathlib import Path
 import sys
+import tempfile
+import time
+import zipfile
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from app import create_window
 from PIL import ImageGrab
+from test_control import fixture, entries
+from test_etiquetas import label
 
 
 root = create_window()
@@ -31,10 +36,44 @@ try:
         generator.folder_button.invoke()
         prepare.assert_called_once()
         opened.assert_called_once_with(Path("C:/prueba"))
+    panel = root.bundle_panel
+    assert panel.only_numbers.get() is False
+    with tempfile.TemporaryDirectory() as temp:
+        directory = Path(temp)
+        pdf = directory / "Control.pdf"
+        fixture(pdf,[entries()+entries(230,sale="2000019000000002",pack="2000018000000002")])
+        archive = directory / "prueba.zip"
+        with zipfile.ZipFile(archive,"w") as z:
+            z.writestr("Control.pdf",pdf.read_bytes())
+            z.writestr("etiquetas.txt",label()+label("2000018000000002"))
+        panel.source_zip = archive
+        panel.output_root = directory / "salida"
+        panel.update_source()
+        panel.text.insert("1.0","2000018000000001\t40\tSKU-A")
+        with patch("unificado.messagebox.askyesno",return_value=True) as offer, \
+             patch("unificado.copy_to_nas",side_effect=lambda result:result):
+            panel.start()
+            deadline = time.monotonic()+15
+            while panel.busy and time.monotonic()<deadline:
+                root.update()
+                time.sleep(0.01)
+            assert not panel.busy
+            assert panel.result is not None
+            assert panel.result.only_numbers
+            offer.assert_called_once()
+            assert "Venta: 2000019000000002" in offer.call_args.args[1]
+            assert "DATOS_PACK" not in panel.result.labels_file.read_text(encoding="utf-8")
+            assert panel.source_zip.name == "Surtido prueba.zip"
+        panel.numbers_option.invoke()
+        assert not panel.only_numbers.get()
+        panel.text.delete("1.0","end")
+        panel.source_zip = None
+        panel.source_pdf = panel.source_txt = None
+        panel.update_source()
     for width,height in [(1040,800),(960,720)]:
         root.geometry(f"{width}x{height}")
         root.update()
-        for widget in [generator.button,generator.folder_button,root.bundle_panel.generate,root.bundle_panel.text]:
+        for widget in [generator.button,generator.folder_button,panel.numbers_option,panel.generate,panel.text]:
             assert widget.winfo_ismapped(), f"Widget no visible: {widget} en {width}x{height}"
             assert widget.winfo_rootx()+widget.winfo_width() <= root.winfo_rootx()+root.winfo_width()+1
             assert widget.winfo_rooty()+widget.winfo_height() <= root.winfo_rooty()+root.winfo_height()+1

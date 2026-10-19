@@ -1471,5 +1471,15 @@ Write-Host (
 Write-Host ""
 
 
+if ($generated.Count -gt 0) {
+    try {
+        Start-Process -FilePath (Join-Path $env:WINDIR "explorer.exe") `
+            -ArgumentList ('"{0}"' -f $PSScriptRoot)
+    }
+    catch {
+        Write-Host "Los archivos se generaron, pero no se pudo abrir la carpeta." -ForegroundColor Yellow
+    }
+}
+
 Read-Host `
     "Presiona ENTER para cerrar"

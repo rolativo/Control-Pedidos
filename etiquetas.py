@@ -5,6 +5,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 import math
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -12,6 +13,31 @@ import tempfile
 import zipfile
 
 from control import ControlError, Order, read_orders, render_pdf
+
+
+class MissingTableError(ControlError):
+    """Permite ofrecer el modo de solo consecutivos sin ocultar pedidos."""
+
+
+class TableRowError(ControlError):
+    def __init__(self, index, raw, message, identifier=None):
+        self.identifier = identifier
+        details = f"Tabla pegada, renglón {index}: {message}\n"
+        if identifier:
+            details += f"Venta o Pack ID de ese renglón: {identifier}\n"
+        super().__init__(details + f"Texto exacto pegado: {raw.strip()}")
+
+
+def order_description(number, order):
+    parts = [f"Consecutivo del control: {number:02d}"]
+    if order.sale:
+        parts.append("Venta: " + order.sale)
+    if order.pack_id:
+        parts.append("Pack ID: " + order.pack_id)
+    skus = [p.sku for p in order.products if p.sku]
+    if skus:
+        parts.append("SKU en el PDF: " + ", ".join(skus))
+    return "\n".join(parts)
 
 
 @dataclass(frozen=True)
@@ -51,6 +77,9 @@ class BundleResult:
     differences: int = 0
     nas_copy: str | None = None
     nas_warning: str | None = None
+    only_numbers: bool = False
+    source_zip: Path | None = None
+    source_warning: str | None = None
 
 
 def parse_table(text: str) -> list[TableRow]:
@@ -66,22 +95,24 @@ def parse_table(text: str) -> list[TableRow]:
             columns = [c.strip() for c in line.split("\t")]
         else:
             columns = [c.strip() for c in re.split(r"\s{2,}", line)]
+        identifier = columns[0].removeprefix("/") if columns else None
+        readable_id = identifier if identifier and re.fullmatch(r"\d{12,22}", identifier) else None
         if columns and all(re.fullmatch(r":?-+:?", c.replace(" ", "")) for c in columns):
             continue
         if len(columns) == 3 and columns[0].casefold().replace(" ", "") in (
                 "packid", "packid/venta", "packidoventa", "venta", "pedido", "identificador"):
             continue
         if len(columns) != 3:
-            raise ControlError(f"Tabla, fila {index}: copia exactamente tres columnas: "
-                               "Pack ID o Venta, Cantidad y SKU.")
+            raise TableRowError(index, raw, "copia exactamente tres columnas: "
+                                "Pack ID o Venta, Cantidad y SKU.", readable_id)
         identifier = columns[0].removeprefix("/")
         quantity, sku = columns[1:]
         if not re.fullmatch(r"\d{12,22}", identifier):
-            raise ControlError(f"Tabla, fila {index}: Pack ID o Venta ilegible.")
+            raise TableRowError(index, raw, "Pack ID o Venta ilegible.")
         if not re.fullmatch(r"[1-9]\d*", quantity):
-            raise ControlError(f"Tabla, fila {index}: la cantidad debe ser un entero mayor que cero.")
+            raise TableRowError(index, raw, "la cantidad debe ser un entero mayor que cero.", identifier)
         if not sku or re.search(r"[\s^~\x00-\x1f\x7f]", sku):
-            raise ControlError(f"Tabla, fila {index}: SKU vacío o con caracteres no admitidos.")
+            raise TableRowError(index, raw, "SKU vacío o con caracteres no admitidos.", identifier)
         rows.append(TableRow(identifier, int(quantity), sku))
     if not rows:
         raise ControlError("La tabla está vacía. Copia las tres columnas y pulsa Pegar tabla.")
@@ -131,7 +162,7 @@ def zpl_field(text: str) -> str:
     return "".join(result)
 
 
-def insert_label_data(block: str, number: int, identifier: str, text: str) -> tuple[str, int]:
+def insert_label_data(block: str, number: int, identifier: str, text: str | None) -> tuple[str, int]:
     newline = "\r\n" if "\r\n" in block else "\n"
     # Volver a procesar una etiqueta creada por este programa no duplica campos.
     block = re.sub(r"(?m)^\^FX NUMERO_CONSECUTIVO[^\r\n]*(?:\r?\n)?", "", block)
@@ -143,18 +174,18 @@ def insert_label_data(block: str, number: int, identifier: str, text: str) -> tu
     compact = any(int(m[2]) <= 105 and ID_VALUE.fullmatch(m[4].strip())
                   for m in FO_FIELD.finditer(block))
     max_font = 16 if compact else 24
-    font = min(max_font, max(9, int(650 / max(1, math.ceil(len(text) * 0.62)))))
-    if len(text) * font * 0.62 > 650:
+    font = min(max_font, max(9, int(650 / max(1, math.ceil(len(text) * 0.62))))) if text else 0
+    if text and len(text) * font * 0.62 > 650:
         raise ControlError(f"Pedido {number:02d}: demasiados datos para la línea de la etiqueta.")
-    if not compact:
+    if text and not compact:
         block = re.sub(r"\^FO120,20\^A0N,24,24\^FH\^FDRemitente([^\^]*)\^FS",
                        r"^FO120,43^A0N,24,24^FH^FDRemitente\1^FS", block, flags=re.I)
         block = re.sub(r"\^FO120,43\^A0N,24,24\^FB550,2,0,L\^FH\^FDCarr_2E([^\^]*)\^FS",
                        r"^FO120,66^A0N,24,24^FB550,1,0,L^FH^FDCarr_2E\1^FS", block, flags=re.I)
     x, y = (133, 2) if compact else (120, 20)
-    inserted = (f"^FX DATOS_PACK {identifier} ^FS{newline}"
-                f"^FO{x},{y}^A0N,{font},{font}^FB650,1,0,L^FH^FD{zpl_field(text)}^FS{newline}"
-                f"^FX NUMERO_CONSECUTIVO {number:02d} ^FS{newline}"
+    inserted = ((f"^FX DATOS_PACK {identifier} ^FS{newline}"
+                 f"^FO{x},{y}^A0N,{font},{font}^FB650,1,0,L^FH^FD{zpl_field(text)}^FS{newline}") if text else "")
+    inserted += (f"^FX NUMERO_CONSECUTIVO {number:02d} ^FS{newline}"
                 f"^FO30,100^A0N,45,45^FB80,1,0,C^FD{number:02d}^FS{newline}")
     origin = re.search(r"\^LH[^\r\n^]*(?:\r?\n)?", block)
     position = origin.end() if origin else len("^XA")
@@ -162,7 +193,7 @@ def insert_label_data(block: str, number: int, identifier: str, text: str) -> tu
     return block, font
 
 
-def transform_labels(text: str, orders: list[Order], rows: list[TableRow]) -> LabelResult:
+def transform_labels(text: str, orders: list[Order], rows: list[TableRow], only_numbers=False) -> LabelResult:
     order_ids = {}
     for number, order in enumerate(orders, 1):
         for identifier in (order.pack_id, order.sale):
@@ -172,16 +203,23 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow]) -> La
                 order_ids[identifier] = (number, order)
     table_by_order = defaultdict(list)
     unused = []
-    for row in rows:
+    for row in ([] if only_numbers else rows):
         if row.identifier in order_ids:
             table_by_order[order_ids[row.identifier][0]].append(row)
         else:
             unused.append(row)
     differences = []
+    missing = [(number, order) for number, order in enumerate(orders, 1)
+               if not only_numbers and not table_by_order[number]]
+    if missing:
+        raise MissingTableError("Faltan datos en la tabla para estos pedidos:\n\n"
+                                + "\n\n".join(order_description(number, order) for number, order in missing)
+                                + "\n\nBusca estas Ventas o Pack ID en Excel y copia sus filas. "
+                                  "El consecutivo es el número del control, no la fila de Excel.\n"
+                                  "También puedes generar con Solo consecutivo, sin SKU ni cantidades.")
     for number, order in enumerate(orders, 1):
-        if not table_by_order[number]:
-            raise ControlError(f"Falta la tabla del pedido {number:02d}: copia sus filas usando "
-                               "su Pack ID o Venta. No se generó el conjunto.")
+        if only_numbers:
+            continue
         expected = Counter(p.sku for p in order.products if p.sku is not None)
         actual = Counter(row.sku for row in table_by_order[number])
         if expected != actual or any(p.sku is None for p in order.products):
@@ -217,7 +255,10 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow]) -> La
             raise ControlError("Una etiqueta contiene identificadores de pedidos distintos.")
         identifier, number, order = pairs[0]
         line = " /".join(f"{row.quantity}/{row.sku}" for row in table_by_order[number])
-        block, font = insert_label_data(block, number, identifier, line)
+        try:
+            block, font = insert_label_data(block, number, identifier, None if only_numbers else line)
+        except ControlError as exc:
+            raise ControlError(str(exc) + "\n" + order_description(number, order)) from exc
         labels.append(LabelInfo(number, identifier, line, font))
         seen.add(number)
         output.append(block)
@@ -225,7 +266,7 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow]) -> La
     output.append(text[cursor:])
     expected_orders = set(range(1, len(orders) + 1))
     if seen != expected_orders:
-        missing = ", ".join(f"{i:02d}" for i in sorted(expected_orders - seen))
+        missing = "\n\n".join(order_description(i, orders[i-1]) for i in sorted(expected_orders - seen))
         raise ControlError(f"Faltan etiquetas para los pedidos: {missing}. No se generó el conjunto.")
     return LabelResult("".join(output), labels, configuration, unused, differences)
 
@@ -257,8 +298,7 @@ def safe_stem(name: str) -> str:
 
 
 def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
-           source_name: str, label_name: str = "Etiquetas.txt") -> BundleResult:
-    rows = parse_table(table)
+           source_name: str, label_name: str = "Etiquetas.txt", only_numbers=False) -> BundleResult:
     if len(pdf_bytes) > MAX_PDF or len(txt_bytes) > MAX_TEXT:
         raise ControlError("El PDF o TXT supera el tamaño admitido.")
     try:
@@ -276,7 +316,15 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
             raise
         except Exception as exc:
             raise ControlError("No se pudo abrir el PDF del conjunto.") from exc
-        labels = transform_labels(label_text, orders, rows)
+        try:
+            rows = [] if only_numbers else parse_table(table)
+        except TableRowError as exc:
+            match = next(((n, order) for n, order in enumerate(orders, 1)
+                          if exc.identifier and exc.identifier in (order.sale, order.pack_id)), None)
+            if match:
+                exc.args = (str(exc) + "\n" + order_description(*match),)
+            raise
+        labels = transform_labels(label_text, orders, rows, only_numbers)
         output_root.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=".control-conjunto-", dir=output_root))
         final_folder = None
@@ -295,7 +343,8 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
                       f"Bloques de configuración conservados sin numerar: {labels.configuration_blocks}",
                       f"Hojas del control: {original_pages} -> {pages}",
                       "Cantidades del PDF: las del PDF original.",
-                      "Cantidades de las etiquetas: las de la tabla copiada.", "",
+                      ("Guías: solo consecutivo, sin agregar SKU ni cantidades."
+                       if only_numbers else "SKU y cantidades de las etiquetas: los de la tabla copiada."), "",
                       "COINCIDENCIAS"]
             report.extend(f"{label.number:02d} | {label.identifier} | {label.text}" for label in labels.labels)
             report.extend(["", "DIFERENCIAS DE SKU (NO IMPIDEN GENERAR)",
@@ -330,7 +379,8 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
             return BundleResult(final_folder, final_folder / pdf_path.name,
                                 final_folder / "Etiquetas" / txt_name,
                                 final_folder / report_path.name, len(orders),
-                                len(labels.labels), pages, len(labels.unused_rows), len(labels.differences))
+                                len(labels.labels), pages, len(labels.unused_rows), len(labels.differences),
+                                only_numbers=only_numbers)
         except Exception:
             if final_folder:
                 shutil.rmtree(final_folder)
@@ -339,17 +389,53 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
             shutil.rmtree(staging, ignore_errors=True)
 
 
-def bundle_zip(source: Path, table: str, output_root: Path | None = None) -> BundleResult:
+def rename_processed_zip(source: Path) -> Path:
+    if source.name.casefold().startswith("surtido"):
+        return source
+    for counter in range(1000):
+        suffix = "" if counter == 0 else f" ({counter+1})"
+        target = source.with_name("Surtido " + source.stem + suffix + source.suffix)
+        try:
+            if os.name == "nt":
+                source.rename(target)
+            else:
+                os.link(source, target)
+                try:
+                    source.unlink()
+                except OSError:
+                    target.unlink()
+                    raise
+            return target
+        except FileExistsError:
+            continue
+    raise OSError("No hay un nombre libre para marcar el ZIP como Surtido.")
+
+
+def bundle_zip(source: Path, table: str = "", output_root: Path | None = None,
+               only_numbers=False) -> BundleResult:
     source = Path(source)
     pdf, txt, txt_name = read_zip(source)
-    return bundle(pdf, txt, table, output_root or source.parent, source.name, txt_name)
+    result = bundle(pdf, txt, table, output_root or source.parent, source.name, txt_name, only_numbers)
+    try:
+        result.source_zip = rename_processed_zip(source)
+    except OSError:
+        result.source_zip = source
+        result.source_warning = ("El PDF y el TXT se generaron correctamente, pero no se pudo agregar "
+                                 "Surtido al nombre del ZIP. El original conserva su nombre.")
+    try:
+        with result.report.open("a", encoding="utf-8") as stream:
+            stream.write("\nZIP ORIGINAL\n" + str(result.source_zip) + "\n" + (result.source_warning or ""))
+    except OSError:
+        pass
+    return result
 
 
-def bundle_files(pdf: Path, txt: Path, table: str, output_root: Path | None = None) -> BundleResult:
+def bundle_files(pdf: Path, txt: Path, table: str = "", output_root: Path | None = None,
+                 only_numbers=False) -> BundleResult:
     pdf, txt = Path(pdf), Path(txt)
     if pdf.stat().st_size > MAX_PDF or txt.stat().st_size > MAX_TEXT:
         raise ControlError("El PDF o TXT supera el tamaño admitido.")
-    return bundle(pdf.read_bytes(), txt.read_bytes(), table, output_root or pdf.parent, pdf.name, txt.name)
+    return bundle(pdf.read_bytes(), txt.read_bytes(), table, output_root or pdf.parent, pdf.name, txt.name, only_numbers)
 
 
 def copy_to_nas(result: BundleResult) -> BundleResult:
