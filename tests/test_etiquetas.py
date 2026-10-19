@@ -224,7 +224,7 @@ class LabelTests(unittest.TestCase):
     def test_number_only_needs_no_rows_preserves_shipping_and_uses_pdf_order(self):
         other = Order("2000019000000002","2000018000000002",[Product("SKU-B",1,"Segundo")])
         original = label(other.pack_id)+"^XA^MCY^XZ"+label()
-        result = transform_labels(original,[self.order,other],[],only_numbers=True)
+        result = transform_labels(original,[self.order,other],[],allow_missing=True)
         self.assertEqual([x.number for x in result.labels],[2,1])
         self.assertNotIn("DATOS_PACK",result.text)
         self.assertNotIn("SKU-A",result.text)
@@ -234,7 +234,7 @@ class LabelTests(unittest.TestCase):
 
     def test_number_only_removes_previously_added_skus_without_duplicating_numbers(self):
         full = transform_labels(label(),[self.order],self.rows)
-        numbered = transform_labels(full.text,[self.order],[],only_numbers=True)
+        numbered = transform_labels(full.text,[self.order],[],allow_missing=True)
         self.assertNotIn("40/SKU-A",numbered.text)
         self.assertNotIn("DATOS_PACK",numbered.text)
         self.assertEqual(numbered.text.count("NUMERO_CONSECUTIVO"),1)
@@ -242,17 +242,61 @@ class LabelTests(unittest.TestCase):
 
     def test_number_only_still_rejects_a_label_for_another_sale(self):
         with self.assertRaises(ControlError):
-            transform_labels(label("2000018000000099"),[self.order],[],only_numbers=True)
+            transform_labels(label("2000018000000099"),[self.order],[],allow_missing=True)
 
-    def test_number_only_bundle_ignores_bad_table_and_keeps_pdf_products(self):
+    def test_empty_table_can_number_missing_guides_and_keeps_pdf_products(self):
         fixture(self.pdf,[entries()])
         self.txt.write_text(label(),encoding="utf-8")
-        result = bundle_files(self.pdf,self.txt,"tabla que no se usa",self.output,only_numbers=True)
-        self.assertTrue(result.only_numbers)
+        result = bundle_files(self.pdf,self.txt,"",self.output,allow_missing=True)
+        self.assertTrue(result.allow_missing)
         self.assertNotIn("SKU-A",result.labels_file.read_text(encoding="utf-8"))
         with fitz.open(result.pdf) as pdf:
             self.assertIn("SKU-A",pdf[0].get_text())
             self.assertIn("×2",pdf[0].get_text())
+
+    def test_missing_guide_only_loses_sku_and_others_keep_pasted_override(self):
+        other = Order("2000019000000002","2000018000000002",[Product("SKU-B",1,"Segundo")])
+        original = label(other.pack_id)+"^XA^MCY^XZ"+label()
+        result = transform_labels(original,[self.order,other],
+                                  [TableRow(self.order.sale,100,"SMEN40NE")],allow_missing=True)
+        blocks = BLOCK.findall(result.text)
+        self.assertNotIn("DATOS_PACK",blocks[0])
+        self.assertIn("NUMERO_CONSECUTIVO 02",blocks[0])
+        self.assertIn("100/SMEN40NE",blocks[2])
+        self.assertIn("NUMERO_CONSECUTIVO 01",blocks[2])
+        self.assertEqual(len(result.number_only_orders),1)
+        self.assertIn(other.sale,result.number_only_orders[0])
+        self.assertNotIn(self.order.sale,result.number_only_orders[0])
+        self.assertFalse(Counter(re.findall(r"\^FD(.*?)\^FS",original,re.S)) -
+                         Counter(re.findall(r"\^FD(.*?)\^FS",result.text,re.S)))
+
+    def test_valid_table_never_loses_sku_with_allow_missing_enabled(self):
+        result = transform_labels(label(),[self.order],self.rows,allow_missing=True)
+        self.assertIn("40/SKU-A",result.text)
+        self.assertEqual(result.number_only_orders,[])
+
+    def test_invalid_known_row_only_numbers_its_order_and_never_partially_prints_it(self):
+        fixture(self.pdf,[entries()+entries(230,sale="2000019000000002",pack="2000018000000002")])
+        self.txt.write_text(label()+label("2000018000000002"),encoding="utf-8")
+        table = ("2000018000000001\t100\tSMEN40NE\n"
+                 "2000018000000002\t5\tVALIDO\n"
+                 "2000019000000002\tmal\tOTRO")
+        result = bundle_files(self.pdf,self.txt,table,self.output,allow_missing=True)
+        blocks = BLOCK.findall(result.labels_file.read_text(encoding="utf-8"))
+        self.assertIn("100/SMEN40NE",blocks[0])
+        self.assertNotIn("DATOS_PACK",blocks[1])
+        self.assertNotIn("VALIDO",blocks[1])
+        self.assertIn("NUMERO_CONSECUTIVO 02",blocks[1])
+        self.assertEqual(len(result.number_only_orders),1)
+        self.assertIn("Venta: 2000019000000002",result.number_only_orders[0])
+        self.assertIn("renglón 3",result.report.read_text(encoding="utf-8"))
+
+    def test_unidentifiable_bad_row_cannot_remove_sku_from_an_arbitrary_guide(self):
+        fixture(self.pdf,[entries()])
+        self.txt.write_text(label(),encoding="utf-8")
+        with self.assertRaises(ControlError):
+            bundle_files(self.pdf,self.txt,"fila sin identificador",self.output,allow_missing=True)
+        self.assertFalse(self.output.exists())
 
     def make_zip(self):
         fixture(self.pdf,[entries()])
@@ -267,7 +311,7 @@ class LabelTests(unittest.TestCase):
         data = archive.read_bytes()
         existing = self.folder / "Surtido Original.zip"
         existing.write_bytes(b"existing zip")
-        result = bundle_zip(archive,"",self.output,only_numbers=True)
+        result = bundle_zip(archive,"",self.output,allow_missing=True)
         self.assertFalse(archive.exists())
         self.assertEqual(result.source_zip.name,"Surtido Original (2).zip")
         self.assertEqual(result.source_zip.read_bytes(),data)
@@ -284,7 +328,7 @@ class LabelTests(unittest.TestCase):
     def test_zip_rename_failure_does_not_cancel_completed_outputs(self):
         archive = self.make_zip()
         with patch("etiquetas.rename_processed_zip",side_effect=PermissionError("solo lectura")):
-            result = bundle_zip(archive,"",self.output,only_numbers=True)
+            result = bundle_zip(archive,"",self.output,allow_missing=True)
         self.assertTrue(result.pdf.exists())
         self.assertTrue(result.labels_file.exists())
         self.assertTrue(archive.exists())

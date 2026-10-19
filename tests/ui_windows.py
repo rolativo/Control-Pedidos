@@ -10,7 +10,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from app import create_window
 from PIL import ImageGrab
 from test_control import fixture, entries
-from test_etiquetas import label
+from test_etiquetas import label, BLOCK
 
 
 root = create_window()
@@ -37,7 +37,7 @@ try:
         prepare.assert_called_once()
         opened.assert_called_once_with(Path("C:/prueba"))
     panel = root.bundle_panel
-    assert panel.only_numbers.get() is False
+    assert panel.allow_missing.get() is False
     with tempfile.TemporaryDirectory() as temp:
         directory = Path(temp)
         pdf = directory / "Control.pdf"
@@ -59,13 +59,18 @@ try:
                 time.sleep(0.01)
             assert not panel.busy
             assert panel.result is not None
-            assert panel.result.only_numbers
+            assert panel.result.allow_missing
             offer.assert_called_once()
             assert "Venta: 2000019000000002" in offer.call_args.args[1]
-            assert "DATOS_PACK" not in panel.result.labels_file.read_text(encoding="utf-8")
+            blocks = BLOCK.findall(panel.result.labels_file.read_text(encoding="utf-8"))
+            assert "40/SKU-A" in blocks[0]
+            assert "NUMERO_CONSECUTIVO 01" in blocks[0]
+            assert "DATOS_PACK" not in blocks[1]
+            assert "NUMERO_CONSECUTIVO 02" in blocks[1]
+            assert len(panel.result.number_only_orders) == 1
             assert panel.source_zip.name == "Surtido prueba.zip"
         panel.numbers_option.invoke()
-        assert not panel.only_numbers.get()
+        assert not panel.allow_missing.get()
         panel.text.delete("1.0","end")
         panel.source_zip = None
         panel.source_pdf = panel.source_txt = None

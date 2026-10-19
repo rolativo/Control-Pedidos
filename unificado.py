@@ -29,7 +29,7 @@ class BundlePanel:
         self.source_zip = self.source_pdf = self.source_txt = self.output_root = None
         self.result = None
         self.busy = False
-        self.only_numbers = tk.BooleanVar(value=False)
+        self.allow_missing = tk.BooleanVar(value=False)
         self.events = queue.Queue()
         frame = ttk.Frame(parent, padding=18)
         frame.pack(fill="both", expand=True)
@@ -62,8 +62,8 @@ class BundlePanel:
         clear = ttk.Button(paste_bar, text="Limpiar tabla", command=self.clear)
         clear.pack(side="left", padx=6)
         self.buttons.append(clear)
-        self.numbers_option = ttk.Checkbutton(paste_bar, text="Solo consecutivo (sin SKU ni cantidades)",
-                                             variable=self.only_numbers, command=self.mode_changed)
+        self.numbers_option = ttk.Checkbutton(paste_bar, text="Sin SKU solo en guías con datos faltantes",
+                                             variable=self.allow_missing, command=self.mode_changed)
         self.numbers_option.pack(side="left", padx=6)
         self.buttons.append(self.numbers_option)
         self.text = ScrolledText(frame, height=13, font=("Consolas", 10), wrap="none", undo=True)
@@ -145,16 +145,16 @@ class BundlePanel:
             self.status.set("Texto pegado. Al generar se revisará la tabla y se indicará la Venta si hay un error.")
 
     def mode_changed(self):
-        self.status.set("Las guías tendrán solo el consecutivo. No se necesita la tabla."
-                        if self.only_numbers.get() else "Las guías usarán los SKU y cantidades de la tabla pegada.")
+        self.status.set("Solo las guías sin datos tendrán el consecutivo; las demás conservarán tus SKU y cantidades."
+                        if self.allow_missing.get() else "Las guías usarán los SKU y cantidades de la tabla pegada.")
 
     def start(self):
         if self.busy:
             return
         try:
             table = self.text.get("1.0", "end-1c")
-            only_numbers = self.only_numbers.get() if hasattr(self, "only_numbers") else False
-            if not only_numbers and not table.strip():
+            allow_missing = self.allow_missing.get() if hasattr(self, "allow_missing") else False
+            if not allow_missing and not table.strip():
                 parse_table(table)
             if not self.source_zip and not (self.source_pdf and self.source_txt):
                 raise ControlError("Selecciona el ZIP, o selecciona el PDF y el TXT por separado.")
@@ -171,12 +171,12 @@ class BundlePanel:
 
         def work():
             try:
-                result = (bundle_zip(source_zip, table, output, only_numbers=only_numbers) if source_zip else
-                          bundle_files(source_pdf, source_txt, table, output, only_numbers=only_numbers))
+                result = (bundle_zip(source_zip, table, output, allow_missing=allow_missing) if source_zip else
+                          bundle_files(source_pdf, source_txt, table, output, allow_missing=allow_missing))
                 self.events.put((True, copy_to_nas(result)))
             except ControlError as exc:
                 self.events.put((False, (record_error(str(exc), source_zip or source_pdf, output, exc),
-                                        isinstance(exc, (MissingTableError, TableRowError)))))
+                                        isinstance(exc, MissingTableError) or getattr(exc, "can_omit", False))))
             except Exception as exc:
                 self.events.put((False, record_error("No se pudo completar el conjunto: " + str(exc),
                                                      source_zip or source_pdf, output, exc)))
@@ -198,8 +198,8 @@ class BundlePanel:
                     message += f" {result.unused_rows} filas de la tabla no aparecen en el PDF; están en Ver revisión."
                 if result.differences:
                     message += " Se usaron los SKU y cantidades que pegaste."
-                if result.only_numbers:
-                    message += " Guías solo con consecutivo, sin SKU ni cantidades."
+                if result.number_only_orders:
+                    message += f" {len(result.number_only_orders)} pedido(s) con guía solo numerada por datos faltantes."
                 if result.source_zip:
                     self.source_zip = result.source_zip
                     self.update_source()
@@ -217,9 +217,10 @@ class BundlePanel:
                 self.status.set(result.splitlines()[0])
                 if can_use_numbers:
                     if messagebox.askyesno("Faltan datos en la tabla", error_preview(result)
-                                           + "\n\n¿Generar las guías solo con consecutivo, sin SKU ni cantidades?",
+                                           + "\n\n¿Continuar dejando solo el consecutivo en las guías de las Ventas indicadas? "
+                                             "Las demás conservarán los SKU y cantidades de la tabla.",
                                            parent=self.root):
-                        self.only_numbers.set(True)
+                        self.allow_missing.set(True)
                         self.start()
                 else:
                     messagebox.showerror("No se generó el conjunto", error_preview(result), parent=self.root)

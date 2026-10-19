@@ -7,7 +7,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_control import fixture, entries
-from test_etiquetas import label
+from test_etiquetas import label, BLOCK
 
 
 def main():
@@ -16,14 +16,14 @@ def main():
         folder = Path(directory)
         pdf = folder / "control.pdf"
         fixture(pdf, [entries(products=[("SMEN40NE-100","1","100 Toallas faciales",[])]) + [(261,170,"Funda sin SKU",True),
-                                  (261,182,"Cantidad: 1",False), (261,194,"Color: Gris",False)]],
+                                  (261,182,"Cantidad: 1",False), (261,194,"Color: Gris",False)] + entries(260,sale="2000019000000002",pack="2000018000000002")],
                 product_heading="Producto")
         archive = folder / "pedido.zip"
         with zipfile.ZipFile(archive, "w") as z:
             z.writestr("control.pdf", pdf.read_bytes())
-            z.writestr("etiquetas.txt", label())
+            z.writestr("etiquetas.txt", label()+label("2000018000000002"))
         table = folder / "tabla.txt"
-        table.write_text("/2000018000000001\t100\tSMEN40NE\n/2000018000000001\t2\tFUNDA-TABLA", encoding="utf-8")
+        table.write_text("/2000018000000001\t100\tSMEN40NE\n/2000018000000001\t2\tFUNDA-TABLA\n/2000018000000002\t40\tSKU-A", encoding="utf-8")
         result = subprocess.run([str(executable), "--sin-ventana", "--zip", str(archive),
                                  "--tabla", str(table), "--salida", str(folder / "salida")], timeout=90)
         if result.returncode:
@@ -47,14 +47,18 @@ def main():
         logs = list(failed_output.glob("Error_Control*.txt"))
         if failure.returncode != 1 or len(logs) != 1 or list(failed_output.glob("**/*.pdf")):
             raise RuntimeError("El ejecutable no registró el fallo sin publicar un PDF.")
-        only_output = folder / "solo-numeros"
+        table.write_text("/2000018000000001\t100\tSMEN40NE",encoding="utf-8")
+        only_output = folder / "faltantes"
         numbered = subprocess.run([str(executable), "--sin-ventana", "--zip", str(archive),
-                                   "--solo-consecutivo", "--salida", str(only_output)], timeout=90)
+                                   "--permitir-faltantes", "--tabla", str(table), "--salida", str(only_output)], timeout=90)
         if numbered.returncode:
-            raise RuntimeError("El ejecutable no generó sin tabla en modo solo consecutivo.")
+            raise RuntimeError("El ejecutable no generó las guías con datos faltantes.")
         labels = list(only_output.glob("*/Etiquetas/*.txt"))[0].read_text(encoding="utf-8")
-        if "DATOS_PACK" in labels or "SMEN40NE" in labels or "NUMERO_CONSECUTIVO 01" not in labels:
-            raise RuntimeError("El modo solo consecutivo añadió un SKU o perdió el número.")
+        blocks = BLOCK.findall(labels)
+        if "100/SMEN40NE" not in blocks[0] or "NUMERO_CONSECUTIVO 01" not in blocks[0]:
+            raise RuntimeError("La guía con datos perdió su SKU o su número.")
+        if "DATOS_PACK" in blocks[1] or "NUMERO_CONSECUTIVO 02" not in blocks[1]:
+            raise RuntimeError("La guía sin datos no quedó únicamente con su consecutivo.")
         print("Ejecutable probado: PDF y etiquetas generados correctamente.")
 
 

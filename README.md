@@ -181,10 +181,11 @@ Libre utiliza cuando el control contiene un solo pedido.
 
 ## Solo consecutivo y errores claros
 
-En Principal puedes marcar **Solo consecutivo (sin SKU ni cantidades)**.
-Este modo genera el mismo control PDF y agrega a cada guía únicamente su número
-correspondiente. No necesita tabla de Excel. Se siguen verificando los Pack ID,
-Ventas, etiquetas completas y coincidencias entre PDF y guías.
+En Principal puedes marcar **Sin SKU solo en guías con datos faltantes**.
+Solo las guías de pedidos sin filas utilizables reciben únicamente su consecutivo.
+Todas las demás conservan los SKU y cantidades de la tabla pegada, incluso si
+difieren del PDF. El control PDF conserva todos sus productos originales.
+Se siguen verificando los Pack ID, Ventas y coincidencias entre PDF y guías.
 
 En el modo habitual, si falta información de la tabla, el error enumera las
 Ventas y Pack ID de todos los pedidos afectados y sus SKU originales. Indica
@@ -192,7 +193,8 @@ expresamente que el consecutivo del control no es una fila de Excel. Si un
 renglón pegado tiene una cantidad o SKU inválido, el error incluye el texto
 exacto y la Venta del PDF cuando se puede relacionar por su Pack ID.
 
-Desde ese aviso puedes aceptar generar solo con consecutivos; también puedes
+Desde ese aviso puedes aceptar numerar solo las guías afectadas sin SKU; las demás
+conservan los datos pegados. También puedes
 cerrarlo, corregir la tabla y generar con tus SKU y cantidades como antes.
 El archivo de error guarda la lista completa aunque el aviso en pantalla
 resuma una lista larga.
@@ -207,8 +209,8 @@ El Generador de la máscara abre automáticamente su carpeta después de crear
 los archivos PMC/AHK, antes de pedir ENTER para cerrar su ventana. La opción
 **Carpeta** permanece disponible para abrirla manualmente.
 
-En línea de comandos, el modo de guías sin tabla se activa con:
+En línea de comandos, para permitir datos faltantes solo en las guías afectadas:
 
 ```bash
-python app.py --sin-ventana --zip pedidos.zip --solo-consecutivo --salida controles
+python app.py --sin-ventana --zip pedidos.zip --tabla tabla.txt --permitir-faltantes --salida controles
 ```

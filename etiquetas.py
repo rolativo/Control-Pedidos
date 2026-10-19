@@ -62,6 +62,7 @@ class LabelResult:
     configuration_blocks: int
     unused_rows: list[TableRow]
     differences: list[str] = field(default_factory=list)
+    number_only_orders: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -77,47 +78,59 @@ class BundleResult:
     differences: int = 0
     nas_copy: str | None = None
     nas_warning: str | None = None
-    only_numbers: bool = False
+    allow_missing: bool = False
     source_zip: Path | None = None
     source_warning: str | None = None
+    number_only_orders: list[str] = field(default_factory=list)
 
 
-def parse_table(text: str) -> list[TableRow]:
+def parse_table(text: str, errors=None) -> list[TableRow]:
     """Admite tres columnas copiadas de Excel o una tabla Markdown."""
     rows = []
     for index, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line:
+        try:
+            row = parse_table_row(index, raw)
+        except TableRowError as exc:
+            if errors is None:
+                raise
+            errors.append(exc)
             continue
-        if line.startswith("|"):
-            columns = [c.strip() for c in line.strip("|").split("|")]
-        elif "\t" in line:
-            columns = [c.strip() for c in line.split("\t")]
-        else:
-            columns = [c.strip() for c in re.split(r"\s{2,}", line)]
-        identifier = columns[0].removeprefix("/") if columns else None
-        readable_id = identifier if identifier and re.fullmatch(r"\d{12,22}", identifier) else None
-        if columns and all(re.fullmatch(r":?-+:?", c.replace(" ", "")) for c in columns):
-            continue
-        if len(columns) == 3 and columns[0].casefold().replace(" ", "") in (
-                "packid", "packid/venta", "packidoventa", "venta", "pedido", "identificador"):
-            continue
-        if len(columns) != 3:
-            raise TableRowError(index, raw, "copia exactamente tres columnas: "
-                                "Pack ID o Venta, Cantidad y SKU.", readable_id)
-        identifier = columns[0].removeprefix("/")
-        quantity, sku = columns[1:]
-        if not re.fullmatch(r"\d{12,22}", identifier):
-            raise TableRowError(index, raw, "Pack ID o Venta ilegible.")
-        if not re.fullmatch(r"[1-9]\d*", quantity):
-            raise TableRowError(index, raw, "la cantidad debe ser un entero mayor que cero.", identifier)
-        if not sku or re.search(r"[\s^~\x00-\x1f\x7f]", sku):
-            raise TableRowError(index, raw, "SKU vacío o con caracteres no admitidos.", identifier)
-        rows.append(TableRow(identifier, int(quantity), sku))
-    if not rows:
+        if row:
+            rows.append(row)
+    if not rows and errors is None:
         raise ControlError("La tabla está vacía. Copia las tres columnas y pulsa Pegar tabla.")
     return rows
 
+
+def parse_table_row(index, raw):
+    line = raw.strip()
+    if not line:
+        return None
+    if line.startswith("|"):
+        columns = [c.strip() for c in line.strip("|").split("|")]
+    elif "\t" in line:
+        columns = [c.strip() for c in line.split("\t")]
+    else:
+        columns = [c.strip() for c in re.split(r"\s{2,}", line)]
+    identifier = columns[0].removeprefix("/") if columns else None
+    readable_id = identifier if identifier and re.fullmatch(r"\d{12,22}", identifier) else None
+    if columns and all(re.fullmatch(r":?-+:?", c.replace(" ", "")) for c in columns):
+        return None
+    if len(columns) == 3 and columns[0].casefold().replace(" ", "") in (
+            "packid", "packid/venta", "packidoventa", "venta", "pedido", "identificador"):
+        return None
+    if len(columns) != 3:
+        raise TableRowError(index, raw, "copia exactamente tres columnas: "
+                            "Pack ID o Venta, Cantidad y SKU.", readable_id)
+    identifier = columns[0].removeprefix("/")
+    quantity, sku = columns[1:]
+    if not re.fullmatch(r"\d{12,22}", identifier):
+        raise TableRowError(index, raw, "Pack ID o Venta ilegible.")
+    if not re.fullmatch(r"[1-9]\d*", quantity):
+        raise TableRowError(index, raw, "la cantidad debe ser un entero mayor que cero.", identifier)
+    if not sku or re.search(r"[\s^~\x00-\x1f\x7f]", sku):
+        raise TableRowError(index, raw, "SKU vacío o con caracteres no admitidos.", identifier)
+    return TableRow(identifier, int(quantity), sku)
 
 BLOCK = re.compile(r"\^XA.*?\^XZ", re.S)
 FO_FIELD = re.compile(r"\^FO(\d+),(\d+)((?:(?!\^FO|\^XZ).)*?)\^FD(.*?)\^FS", re.S)
@@ -193,7 +206,7 @@ def insert_label_data(block: str, number: int, identifier: str, text: str | None
     return block, font
 
 
-def transform_labels(text: str, orders: list[Order], rows: list[TableRow], only_numbers=False) -> LabelResult:
+def transform_labels(text: str, orders: list[Order], rows: list[TableRow], allow_missing=False) -> LabelResult:
     order_ids = {}
     for number, order in enumerate(orders, 1):
         for identifier in (order.pack_id, order.sale):
@@ -203,22 +216,23 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow], only_
                 order_ids[identifier] = (number, order)
     table_by_order = defaultdict(list)
     unused = []
-    for row in ([] if only_numbers else rows):
+    for row in rows:
         if row.identifier in order_ids:
             table_by_order[order_ids[row.identifier][0]].append(row)
         else:
             unused.append(row)
     differences = []
     missing = [(number, order) for number, order in enumerate(orders, 1)
-               if not only_numbers and not table_by_order[number]]
-    if missing:
+               if not table_by_order[number]]
+    if missing and not allow_missing:
         raise MissingTableError("Faltan datos en la tabla para estos pedidos:\n\n"
                                 + "\n\n".join(order_description(number, order) for number, order in missing)
                                 + "\n\nBusca estas Ventas o Pack ID en Excel y copia sus filas. "
                                   "El consecutivo es el número del control, no la fila de Excel.\n"
-                                  "También puedes generar con Solo consecutivo, sin SKU ni cantidades.")
+                                  "También puedes continuar dejando solo el consecutivo en estas guías. "
+                                  "Las demás conservarán los SKU y cantidades pegados.")
     for number, order in enumerate(orders, 1):
-        if only_numbers:
+        if not table_by_order[number]:
             continue
         expected = Counter(p.sku for p in order.products if p.sku is not None)
         actual = Counter(row.sku for row in table_by_order[number])
@@ -256,7 +270,7 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow], only_
         identifier, number, order = pairs[0]
         line = " /".join(f"{row.quantity}/{row.sku}" for row in table_by_order[number])
         try:
-            block, font = insert_label_data(block, number, identifier, None if only_numbers else line)
+            block, font = insert_label_data(block, number, identifier, line or None)
         except ControlError as exc:
             raise ControlError(str(exc) + "\n" + order_description(number, order)) from exc
         labels.append(LabelInfo(number, identifier, line, font))
@@ -268,7 +282,8 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow], only_
     if seen != expected_orders:
         missing = "\n\n".join(order_description(i, orders[i-1]) for i in sorted(expected_orders - seen))
         raise ControlError(f"Faltan etiquetas para los pedidos: {missing}. No se generó el conjunto.")
-    return LabelResult("".join(output), labels, configuration, unused, differences)
+    return LabelResult("".join(output), labels, configuration, unused, differences,
+                       [order_description(n, o) for n, o in missing])
 
 
 MAX_PDF = 50 * 1024 * 1024
@@ -298,7 +313,7 @@ def safe_stem(name: str) -> str:
 
 
 def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
-           source_name: str, label_name: str = "Etiquetas.txt", only_numbers=False) -> BundleResult:
+           source_name: str, label_name: str = "Etiquetas.txt", allow_missing=False) -> BundleResult:
     if len(pdf_bytes) > MAX_PDF or len(txt_bytes) > MAX_TEXT:
         raise ControlError("El PDF o TXT supera el tamaño admitido.")
     try:
@@ -316,15 +331,28 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
             raise
         except Exception as exc:
             raise ControlError("No se pudo abrir el PDF del conjunto.") from exc
+        bad_rows = []
+        row_warnings = []
         try:
-            rows = [] if only_numbers else parse_table(table)
+            rows = parse_table(table, errors=bad_rows) if allow_missing else parse_table(table)
         except TableRowError as exc:
             match = next(((n, order) for n, order in enumerate(orders, 1)
                           if exc.identifier and exc.identifier in (order.sale, order.pack_id)), None)
             if match:
                 exc.args = (str(exc) + "\n" + order_description(*match),)
+                exc.can_omit = True
             raise
-        labels = transform_labels(label_text, orders, rows, only_numbers)
+        blocked_ids = set()
+        for error in bad_rows:
+            match = next(((n, order) for n, order in enumerate(orders, 1)
+                          if error.identifier and error.identifier in (order.sale, order.pack_id)), None)
+            if not match:
+                raise error
+            number, order = match
+            blocked_ids.update(identifier for identifier in (order.sale, order.pack_id) if identifier)
+            row_warnings.append(str(error) + "\n" + order_description(number, order))
+        rows = [row for row in rows if row.identifier not in blocked_ids]
+        labels = transform_labels(label_text, orders, rows, allow_missing)
         output_root.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=".control-conjunto-", dir=output_root))
         final_folder = None
@@ -343,10 +371,14 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
                       f"Bloques de configuración conservados sin numerar: {labels.configuration_blocks}",
                       f"Hojas del control: {original_pages} -> {pages}",
                       "Cantidades del PDF: las del PDF original.",
-                      ("Guías: solo consecutivo, sin agregar SKU ni cantidades."
-                       if only_numbers else "SKU y cantidades de las etiquetas: los de la tabla copiada."), "",
+                      "SKU y cantidades de las guías con datos: los de la tabla copiada.",
+                      f"Pedidos con guía solo numerada por datos faltantes: {len(labels.number_only_orders)}", "",
                       "COINCIDENCIAS"]
             report.extend(f"{label.number:02d} | {label.identifier} | {label.text}" for label in labels.labels)
+            report.extend(["", "GUÍAS SOLO CON CONSECUTIVO (SIN DATOS UTILIZABLES)"])
+            report.extend(labels.number_only_orders)
+            report.extend(["", "RENGLONES INVÁLIDOS DE ESTOS PEDIDOS"])
+            report.extend(row_warnings)
             report.extend(["", "DIFERENCIAS DE SKU (NO IMPIDEN GENERAR)",
                            "La tabla pegada tiene prioridad para SKU y cantidades de las etiquetas."])
             report.extend(labels.differences)
@@ -380,7 +412,7 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
                                 final_folder / "Etiquetas" / txt_name,
                                 final_folder / report_path.name, len(orders),
                                 len(labels.labels), pages, len(labels.unused_rows), len(labels.differences),
-                                only_numbers=only_numbers)
+                                allow_missing=allow_missing, number_only_orders=labels.number_only_orders)
         except Exception:
             if final_folder:
                 shutil.rmtree(final_folder)
@@ -412,10 +444,10 @@ def rename_processed_zip(source: Path) -> Path:
 
 
 def bundle_zip(source: Path, table: str = "", output_root: Path | None = None,
-               only_numbers=False) -> BundleResult:
+               allow_missing=False) -> BundleResult:
     source = Path(source)
     pdf, txt, txt_name = read_zip(source)
-    result = bundle(pdf, txt, table, output_root or source.parent, source.name, txt_name, only_numbers)
+    result = bundle(pdf, txt, table, output_root or source.parent, source.name, txt_name, allow_missing)
     try:
         result.source_zip = rename_processed_zip(source)
     except OSError:
@@ -431,11 +463,11 @@ def bundle_zip(source: Path, table: str = "", output_root: Path | None = None,
 
 
 def bundle_files(pdf: Path, txt: Path, table: str = "", output_root: Path | None = None,
-                 only_numbers=False) -> BundleResult:
+                 allow_missing=False) -> BundleResult:
     pdf, txt = Path(pdf), Path(txt)
     if pdf.stat().st_size > MAX_PDF or txt.stat().st_size > MAX_TEXT:
         raise ControlError("El PDF o TXT supera el tamaño admitido.")
-    return bundle(pdf.read_bytes(), txt.read_bytes(), table, output_root or pdf.parent, pdf.name, txt.name, only_numbers)
+    return bundle(pdf.read_bytes(), txt.read_bytes(), table, output_root or pdf.parent, pdf.name, txt.name, allow_missing)
 
 
 def copy_to_nas(result: BundleResult) -> BundleResult:
