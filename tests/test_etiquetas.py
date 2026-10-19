@@ -89,7 +89,7 @@ class LabelTests(unittest.TestCase):
             text = pdf[0].get_text()
         self.assertIn("×2", text)
         self.assertNotIn("×40", text)
-        self.assertIn("^FD40/SKU-A^FS", result.labels_file.read_text())
+        self.assertIn("^FD40/SKU-A^FS", result.labels_file.read_text(encoding="utf-8"))
 
     def test_original_barcode_receiver_and_field_values_preserved(self):
         original = label()
@@ -131,8 +131,8 @@ class LabelTests(unittest.TestCase):
         self.txt.write_text(label(),encoding="utf-8")
         table = "/2000018000000001\t40\tSKU-A\n/2000018000000001\t2\tFUNDA-TABLA"
         result = bundle_files(self.pdf,self.txt,table,self.output)
-        self.assertIn("40/SKU-A /2/FUNDA-TABLA",result.labels_file.read_text())
-        self.assertIn("no se puede verificar",result.report.read_text())
+        self.assertIn("40/SKU-A /2/FUNDA-TABLA",result.labels_file.read_text(encoding="utf-8"))
+        self.assertIn("no se puede verificar",result.report.read_text(encoding="utf-8"))
         with fitz.open(result.pdf) as doc:
             text = doc[0].get_text()
         self.assertIn("Funda sin SKU",text)
@@ -191,13 +191,13 @@ class LabelTests(unittest.TestCase):
 
     def test_generator_scripts_have_matching_names_and_are_persistent(self):
         bat = prepare_generator(self.folder)
-        self.assertIn('Generador.ps1', bat.read_text())
+        self.assertIn('Generador.ps1', bat.read_text(encoding="utf-8"))
         self.assertTrue((bat.parent / "Generador.ps1").is_file())
         self.assertEqual(bat, prepare_generator(self.folder))
         bat.write_text("archivo modificado")
         alternate = prepare_generator(self.folder)
         self.assertNotEqual(bat, alternate)
-        self.assertEqual(bat.read_text(), "archivo modificado")
+        self.assertEqual(bat.read_text(encoding="utf-8"), "archivo modificado")
 
     def test_missing_table_lists_actual_sales_and_pack_ids_for_all_missing_orders(self):
         other = Order("2000019000000002",None,[Product("SKU-B",1,"Segundo")])
@@ -340,13 +340,13 @@ class LabelTests(unittest.TestCase):
         if not sample or not table_path:
             self.skipTest("Muestra real opcional; no se incluye en GitHub")
         result = bundle_files(Path(os.environ["CONTROL_SAMPLE_PDF"]), Path(sample),
-                              Path(table_path).read_text(), self.output)
+                              Path(table_path).read_text(encoding="utf-8"), self.output)
         self.assertEqual((result.orders,result.labels,result.pages,result.unused_rows), (35,35,2,3))
-        zpl = result.labels_file.read_text()
+        zpl = result.labels_file.read_text(encoding="utf-8")
         numbers = [int(n) for n in re.findall(r"\^FX NUMERO_CONSECUTIVO (\d+)", zpl)]
         self.assertEqual(numbers, list(range(1,36)))
         self.assertIn("^XA^MCY^XZ", zpl)
-        original = Path(sample).read_text()
+        original = Path(sample).read_text(encoding="utf-8")
         self.assertFalse(Counter(re.findall(r"\^FD(.*?)\^FS",original,re.S)) -
                          Counter(re.findall(r"\^FD(.*?)\^FS",zpl,re.S)))
 

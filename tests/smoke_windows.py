@@ -33,7 +33,7 @@ def main():
             raise RuntimeError("El ejecutable no agregó Surtido al ZIP original.")
         pdfs = list((folder / "salida").glob("*/Control_resumido.pdf"))
         texts = list((folder / "salida").glob("*/Etiquetas/*.txt"))
-        if len(pdfs) != 1 or len(texts) != 1 or "^FD100/SMEN40NE /2/FUNDA-TABLA^FS" not in texts[0].read_text():
+        if len(pdfs) != 1 or len(texts) != 1 or "^FD100/SMEN40NE /2/FUNDA-TABLA^FS" not in texts[0].read_text(encoding="utf-8"):
             raise RuntimeError("El ejecutable no produjo los dos archivos esperados.")
         import fitz
         with fitz.open(pdfs[0]) as pdf:
