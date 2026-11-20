@@ -103,14 +103,16 @@ class ShippingTests(unittest.TestCase):
         self.assertIn("20/CAMBIADO",transform_labels(shipping_label(),[old],rows).text)
         self.assertIn("20/CAMBIADO",transform_labels(label(old.sale,"Venta"),[self.first],rows).text)
 
-    def test_conflicting_sale_and_guide_rejected_with_both_order_details(self):
+    def test_matching_sale_takes_priority_over_a_secondary_guide(self):
         old=Order("2000019000000001",products=[Product("SKU-A",1,"Uno")])
-        with self.assertRaises(ControlError) as caught:
-            transform_labels(label(old.sale,"Venta")+shipping_label(),[old,self.first],
-                             [TableRow(old.sale,1,"SKU-C","48580000001")])
-        message=str(caught.exception)
-        for value in (old.sale,"48580000001","SKU-C","SKU-A"):
-            self.assertIn(value,message)
+        result=transform_labels(label(old.sale,"Venta")+shipping_label(),[old,self.first],
+                               [TableRow(old.sale,30,"DE-VENTA","48580000001"),
+                                TableRow("48580000001",4,"DE-GUIA")])
+        blocks=BLOCK.findall(result.text)
+        self.assertIn("30/DE-VENTA",blocks[0])
+        self.assertNotIn("DE-GUIA",blocks[0])
+        self.assertIn("4/DE-GUIA",blocks[1])
+        self.assertNotIn("DE-VENTA",blocks[1])
 
     def test_missing_only_one_guide_preserves_other_pasted_values(self):
         result=transform_labels(shipping_label()+shipping_label(self.second.shipping_id),
@@ -158,6 +160,90 @@ class ShippingTests(unittest.TestCase):
         self.assertEqual(len(result.labels),1)
         self.assertEqual(result.labels[0].text,"100/SMEN40NE /3/SKU-B")
         self.assertEqual(result.text.count("NUMERO_CONSECUTIVO"),1)
+
+    def test_sale_or_pack_with_unreadable_optional_guide_still_works(self):
+        fixture(self.pdf,[entries()])
+        self.txt.write_text(label(),encoding="utf-8")
+        for identifier in ("2000019000000001","2000018000000001"):
+            with self.subTest(identifier=identifier):
+                result=bundle_files(self.pdf,self.txt,f"{identifier}\t2\tMRLG16\tLisa",self.output)
+                self.assertIn("2/MRLG16",result.labels_file.read_text(encoding="utf-8"))
+                self.assertEqual(result.number_only_orders,[])
+
+    def test_guide_alone_works_even_when_primary_identifier_is_unreadable(self):
+        fixture(self.pdf,[shipping_entries()])
+        self.txt.write_text(shipping_label(),encoding="utf-8")
+        result=bundle_files(self.pdf,self.txt,"sin venta\t10\tSKU-A\t48580000001",self.output)
+        self.assertIn("10/SKU-A",result.labels_file.read_text(encoding="utf-8"))
+
+    def test_unmatched_sale_and_matched_guide_use_the_guide(self):
+        result=transform_labels(shipping_label(),[self.first],
+                                [TableRow("2000019999999999",12,"POR-GUIA",self.first.shipping_id)])
+        self.assertIn("12/POR-GUIA",result.text)
+
+    def test_matching_pack_takes_priority_over_a_different_guide(self):
+        old=Order(pack_id="2000018000000001",products=[Product("SKU-A",1,"Uno")])
+        result=transform_labels(label(old.pack_id)+shipping_label(),[old,self.first],
+                               [TableRow(old.pack_id,30,"DE-PACK",self.first.shipping_id),
+                                TableRow(self.first.shipping_id,4,"DE-GUIA")])
+        blocks=BLOCK.findall(result.text)
+        self.assertIn("30/DE-PACK",blocks[0])
+        self.assertIn("4/DE-GUIA",blocks[1])
+
+    def test_extra_unselected_records_are_ignored_even_with_bad_quantity_sku_or_guide(self):
+        fixture(self.pdf,[entries()])
+        self.txt.write_text(label(),encoding="utf-8")
+        table=("2000019000000001\t20\tSKU-VALIDO\t\n"
+               "2000019999999999\tmal\tSKU AJENO\tLisa\n"
+               "2000019999999998\t5\tOTRO\t48589999999\n"
+               "texto extra sin columnas")
+        result=bundle_files(self.pdf,self.txt,table,self.output)
+        self.assertEqual(result.unused_rows,3)
+        output=result.labels_file.read_text(encoding="utf-8")
+        self.assertIn("20/SKU-VALIDO",output)
+        for extra in ("SKU AJENO","OTRO","texto extra"):
+            self.assertNotIn(extra,output)
+        self.assertIn("REGISTROS IGNORADOS",result.report.read_text(encoding="utf-8"))
+
+    def test_bad_quantity_for_a_matched_sale_still_names_that_sale_and_sku(self):
+        fixture(self.pdf,[entries()])
+        self.txt.write_text(label(),encoding="utf-8")
+        with self.assertRaises(ControlError) as caught:
+            bundle_files(self.pdf,self.txt,"2000019000000001\tmal\tMRLG16\tLisa",self.output)
+        self.assertIn("2000019000000001",str(caught.exception))
+        self.assertIn("MRLG16",str(caught.exception))
+        self.assertIn("cantidad",str(caught.exception))
+        self.assertFalse(self.output.exists())
+
+    def test_label_with_missing_secondary_id_still_matches_primary_sale(self):
+        old=Order("2000019000000001",products=[Product("SKU-A",1,"Uno")])
+        original=label(old.sale,"Venta").replace("^XZ", "^FO120,220^A0N,24,24^FDPack ID: 2000018999999999^FS\n^XZ")
+        result=transform_labels(original,[old],[TableRow(old.sale,10,"SOLO-VENTA")])
+        self.assertIn("10/SOLO-VENTA",result.text)
+
+    def test_label_uses_pack_when_sale_is_unknown(self):
+        old=Order(pack_id="2000018000000001",products=[Product("SKU-A",1,"Uno")])
+        original=label(old.pack_id).replace("^XZ", "^FO120,220^A0N,24,24^FDVenta: 2000019999999999^FS\n^XZ")
+        result=transform_labels(original,[old],[TableRow(old.pack_id,10,"SOLO-PACK")])
+        self.assertIn("10/SOLO-PACK",result.text)
+
+    def test_secondary_identifier_never_overwrites_another_orders_primary_id(self):
+        old=Order("2000019000000001",products=[Product("SKU-A",1,"Uno")])
+        other=Order("2000019000000002",products=[Product("SKU-B",1,"Dos")])
+        result=transform_labels(label(old.sale,"Venta")+label(other.sale,"Venta"),[old,other],
+                               [TableRow(old.sale,5,"PRIMERO",other.sale),
+                                TableRow(other.sale,7,"SEGUNDO")])
+        blocks=BLOCK.findall(result.text)
+        self.assertIn("5/PRIMERO",blocks[0])
+        self.assertNotIn("SEGUNDO",blocks[0])
+        self.assertIn("7/SEGUNDO",blocks[1])
+
+    def test_unknown_only_table_does_not_guess_a_match_by_sku(self):
+        fixture(self.pdf,[entries()])
+        self.txt.write_text(label(),encoding="utf-8")
+        with self.assertRaises(MissingTableError):
+            bundle_files(self.pdf,self.txt,"2000019999999999\t2\tSKU-A",self.output)
+        self.assertFalse(self.output.exists())
 
 
 if __name__ == "__main__":

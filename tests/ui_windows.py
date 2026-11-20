@@ -61,7 +61,8 @@ try:
         panel.source_zip = archive
         panel.output_root = directory / "salida"
         panel.update_source()
-        panel.text.insert("1.0","2000018000000001\t40\tSKU-A")
+        panel.text.insert("1.0","2000018000000001\t40\tSKU-A\tLisa\n"
+                          "2000019999999999\tmal\tSKU AJENO\tLisa")
         with patch("unificado.messagebox.askyesno",return_value=True) as offer, \
              patch("unificado.copy_to_nas",side_effect=lambda result:result):
             panel.start()
@@ -72,6 +73,7 @@ try:
             assert not panel.busy
             assert panel.result is not None
             assert panel.result.allow_missing
+            assert panel.result.unused_rows == 1
             offer.assert_called_once()
             assert "Venta: 2000019000000002" in offer.call_args.args[1]
             blocks = BLOCK.findall(panel.result.labels_file.read_text(encoding="utf-8"))

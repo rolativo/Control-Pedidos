@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_control import fixture, entries
 from test_etiquetas import label, BLOCK
 from test_shipping import shipping_entries, shipping_label
+from version import VERSION
 
 
 def main():
@@ -24,7 +25,10 @@ def main():
             z.writestr("control.pdf", pdf.read_bytes())
             z.writestr("etiquetas.txt", label()+label("2000018000000002"))
         table = folder / "tabla.txt"
-        table.write_text("/2000018000000001\t100\tSMEN40NE\n/2000018000000001\t2\tFUNDA-TABLA\n/2000018000000002\t40\tSKU-A", encoding="utf-8")
+        table.write_text("/2000018000000001\t100\tSMEN40NE\tLisa\n"
+                         "/2000018000000001\t2\tFUNDA-TABLA\t\n"
+                         "/2000018000000002\t40\tSKU-A\t\n"
+                         "/2000019999999999\tmal\tSKU AJENO\tLisa", encoding="utf-8")
         result = subprocess.run([str(executable), "--sin-ventana", "--zip", str(archive),
                                  "--tabla", str(table), "--salida", str(folder / "salida")], timeout=90)
         if result.returncode:
@@ -36,6 +40,9 @@ def main():
         texts = list((folder / "salida").glob("*/Etiquetas/*.txt"))
         if len(pdfs) != 1 or len(texts) != 1 or "^FD100/SMEN40NE /2/FUNDA-TABLA^FS" not in texts[0].read_text(encoding="utf-8"):
             raise RuntimeError("El ejecutable no produjo los dos archivos esperados.")
+        report=list((folder / "salida").glob("*/Revision.txt"))[0].read_text(encoding="utf-8")
+        if "REGISTROS IGNORADOS" not in report or "Total: 1" not in report:
+            raise RuntimeError("El ejecutable no ignoró el registro ajeno a la solicitud.")
         import fitz
         with fitz.open(pdfs[0]) as pdf:
             text = pdf[0].get_text()
@@ -83,7 +90,7 @@ def main():
                                "--tabla",str(table),"--salida",str(errors)],timeout=90)
         diagnostic=list(errors.glob("Error_Control*.txt"))[0].read_text(encoding="utf-8")
         if failed.returncode!=1 or not all(value in diagnostic for value in
-                                           ("2000019000000001","48580000001","SKU-ERROR","2026.11.20.1")):
+                                           ("2000019000000001","48580000001","SKU-ERROR",VERSION)):
             raise RuntimeError("El error del ejecutable no identificó Venta, guía, SKU y versión.")
         print("Ejecutable probado: PDF y etiquetas generados correctamente.")
 

@@ -39,7 +39,7 @@ class BundlePanel:
         self.generator = GeneratorLauncher(root, heading, open_path)
         self.generator.frame.pack(side="right")
         ttk.Label(frame, text="Elige el ZIP y pega: Venta / Pack ID, Cantidad, SKU y Número de guía. "
-                  "La cuarta columna es opcional si el identificador ya coincide.", wraplength=900).pack(anchor="w", pady=(4, 12))
+                  "Basta un identificador: Venta, luego Pack ID y luego guía. Se ignoran registros ajenos.", wraplength=900).pack(anchor="w", pady=(4, 12))
         selectors = ttk.Frame(frame)
         selectors.pack(fill="x")
         self.buttons = []
@@ -218,7 +218,7 @@ class BundlePanel:
                 self.status.set(result.splitlines()[0])
                 if can_use_numbers:
                     if messagebox.askyesno("Faltan datos en la tabla", error_preview(result)
-                                           + "\n\n¿Continuar dejando solo el consecutivo en las guías de las Ventas indicadas? "
+                                           + "\n\n¿Continuar dejando solo el consecutivo en las guías de los pedidos indicados? "
                                              "Las demás conservarán los SKU y cantidades de la tabla.",
                                            parent=self.root):
                         self.allow_missing.set(True)

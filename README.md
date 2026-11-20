@@ -216,22 +216,31 @@ python app.py --sin-ventana --zip pedidos.zip --tabla tabla.txt --permitir-falta
 ```
 
 
-## Versión 2026.11.20.1: número de guía y errores identificables
+## Versión 2026.11.20.2: basta una coincidencia e ignora datos ajenos
 
 El lector acepta pedidos con `Envío`, `Envio`, `Guía`, Venta o Pack ID, mezclados
 en el mismo PDF. El control imprime los identificadores que realmente existen
 en el PDF original. No inventa Ventas para los pedidos que solo tienen Envío.
 
 Pega las columnas en este orden: **Venta / Pack ID, Cantidad, SKU, Número de guía**.
-La cuarta columna es opcional para los archivos anteriores. También se aceptan
+La cuarta columna es opcional. También se aceptan
 tres columnas con el número de guía directamente como primer identificador.
 Si no existe Venta/Pack ID, puede quedar vacía la primera columna cuando hay guía.
 
 El cruce se realiza por los identificadores, nunca por coincidencia de SKU.
 La cuarta columna permite enlazar la Venta de Excel con el Envío del PDF o
 la guía ZPL. Un mismo pedido mantiene un consecutivo y todos sus SKU.
-Si la Venta y la guía apuntan a pedidos distintos, se detiene y muestra ambos.
+Para cada registro busca primero una Venta coincidente, después Pack ID y por
+último número de guía. Basta uno que coincida; los otros pueden faltar o ser
+ilegibles. Por ejemplo, una Venta coincidente permite usar el registro aunque
+la cuarta columna contenga `Lisa` en lugar de una guía. Un identificador secundario
+no sobrescribe la relación de otro pedido.
 Los SKU y cantidades pegados conservan prioridad para las etiquetas.
+
+Los registros de la tabla que no correspondan al PDF seleccionado se ignoran,
+incluso si sus cantidades, SKU o identificadores están incompletos. Se enumeran
+en `Revision.txt` y no se agregan a las etiquetas ni al control. Los errores de
+cantidad o SKU de un pedido que sí coincide se siguen indicando con sus datos.
 
 Los errores muestran Venta, Pack ID, guía/Envío, SKU y cantidad disponibles,
 y el registro pegado cuando corresponde. Si el PDF no tiene ningún identificador,

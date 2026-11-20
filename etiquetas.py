@@ -65,51 +65,66 @@ def row_description(row):
     return "\n".join(values)
 
 
+def numeric_id(value):
+    value = (value or "").lstrip("/#")
+    return value if re.fullmatch(r"\d{8,25}", value) else None
+
+
+class OrderIndex(dict):
+    def __init__(self):
+        super().__init__()
+        self.priority = {}
+        self.ambiguous = set()
+
+
+def match_record(index, identifier, shipping_id=None, direct_only=False):
+    candidates = [(index.priority[value], position, index[value])
+                  for position, value in enumerate((identifier, shipping_id))
+                  if value and value in index and (not direct_only or index.priority[value] < 3)]
+    return min(candidates, key=lambda item: item[:2])[2] if candidates else None
+
+
 def resolve_table(orders, rows, identity_rows=()):
-    """Cruza por identificadores explícitos; una coincidencia conflictiva se rechaza."""
-    aliases = {}
+    """Basta una coincidencia: Venta, Pack ID y después guía; nunca por SKU."""
+    index = OrderIndex()
     for number, order in enumerate(orders, 1):
-        for identifier in order_ids(order):
-            if identifier in aliases and aliases[identifier][0] != number:
-                raise ControlError("El mismo identificador aparece en pedidos distintos:\n"
-                                   + order_description(*aliases[identifier]) + "\n"
-                                   + order_description(number, order))
-            aliases[identifier] = (number, order)
-    # Las cuatro columnas pueden enlazar una guía nueva con una Venta del PDF
-    # antiguo, o una Venta de Excel con una guía del PDF nuevo. Nunca por SKU.
-    pending = list(rows) + list(identity_rows)
-    while pending:
-        remaining = []
-        progress = False
-        for row in pending:
-            ids = [value for value in (row.identifier, row.shipping_id) if value]
-            matches = {aliases[value][0]: aliases[value] for value in ids if value in aliases}
-            if len(matches) > 1:
-                raise ControlError("Datos contradictorios: la Venta / Pack ID y la guía "
-                                   "corresponden a pedidos distintos.\n" + row_description(row)
-                                   + "\n\n" + "\n\n".join(order_description(*pair) for pair in matches.values()))
-            if not matches:
-                remaining.append(row)
+        for priority, identifier in enumerate((order.sale, order.pack_id, order.shipping_id)):
+            if not identifier:
                 continue
-            pair = next(iter(matches.values()))
-            for identifier in ids:
-                aliases[identifier] = pair
-            progress = True
-        if not progress:
-            break
-        pending = remaining
+            if identifier in index and index[identifier][0] != number:
+                raise ControlError("El mismo identificador aparece en pedidos distintos:\n"
+                                   + order_description(*index[identifier]) + "\n"
+                                   + order_description(number, order))
+            index[identifier] = (number, order)
+            index.priority[identifier] = min(priority, index.priority.get(identifier, priority))
+    # Solo un identificador del PDF puede autorizar un enlace. Un dato secundario
+    # no sobrescribe otro pedido ni crea coincidencias en cadena entre filas extras.
+    for row in list(rows) + list(identity_rows):
+        pair = match_record(index, row.identifier, row.shipping_id, direct_only=True)
+        if not pair:
+            continue
+        for identifier in (row.identifier, row.shipping_id):
+            if not numeric_id(identifier) or identifier in index.ambiguous:
+                continue
+            if identifier in index:
+                if index.priority[identifier] < 3:
+                    continue
+                if index[identifier][0] != pair[0]:
+                    del index[identifier]
+                    del index.priority[identifier]
+                    index.ambiguous.add(identifier)
+            else:
+                index[identifier] = pair
+                index.priority[identifier] = 3
     table_by_order = defaultdict(list)
     unused = []
     for row in rows:
-        matches = {aliases[value][0]: aliases[value] for value in (row.identifier, row.shipping_id)
-                   if value and value in aliases}
-        if len(matches) > 1:
-            raise ControlError("La tabla contiene identificadores contradictorios.\n" + row_description(row))
-        if matches:
-            table_by_order[next(iter(matches))].append(row)
+        pair = match_record(index, row.identifier, row.shipping_id)
+        if pair:
+            table_by_order[pair[0]].append(row)
         else:
             unused.append(row)
-    return aliases, table_by_order, unused
+    return index, table_by_order, unused
 
 
 @dataclass(frozen=True)
@@ -193,15 +208,14 @@ def parse_table_row(index, raw):
         raise TableRowError(index, raw, message, identifier or None, shipping or None, sku, quantity)
     if len(columns) not in (3, 4):
         invalid("copia Venta / Pack ID, Cantidad, SKU y, como cuarta columna, Número de guía.")
-    if shipping and not re.fullmatch(r"\d{8,25}", shipping):
-        invalid("número de guía ilegible; copia todos sus dígitos como texto.")
-    if (identifier and not re.fullmatch(r"\d{8,25}", identifier)) or not (identifier or shipping):
-        invalid("Venta / Pack ID / número de guía ilegible.")
+    valid_identifier, valid_shipping = numeric_id(identifier), numeric_id(shipping)
+    if not (valid_identifier or valid_shipping):
+        invalid("no hay una Venta, Pack ID o número de guía legible para identificarlo.")
     if not re.fullmatch(r"[1-9]\d*", quantity):
         invalid("la cantidad debe ser un entero mayor que cero.")
     if not sku or re.search(r"[\s^~\x00-\x1f\x7f]", sku):
         invalid("SKU vacío o con caracteres no admitidos.")
-    return TableRow(identifier, int(quantity), sku, shipping or None)
+    return TableRow(valid_identifier or "", int(quantity), sku, valid_shipping)
 
 
 BLOCK = re.compile(r"\^XA.*?\^XZ", re.S)
@@ -329,19 +343,14 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow], allow
             output.append(block)
             cursor = match.end()
             continue
-        pairs = []
-        for kind, identifier in identifiers:
-            if identifier not in aliases:
-                raise ControlError(f"Etiqueta con {kind}: {identifier}; no se pudo relacionar con el PDF.\n"
-                                   + label_details(block) + "\n"
-                                   + "\n".join(row_description(r) for r in rows
-                                               if identifier in (r.identifier, r.shipping_id)))
-            pairs.append((identifier, *aliases[identifier]))
-        if len({pair[1] for pair in pairs}) != 1:
-            raise ControlError("Una etiqueta contiene identificadores de pedidos distintos.\n"
-                               + "\n\n".join(order_description(number, order)
-                                               for _, number, order in pairs))
-        identifier, number, order = pairs[0]
+        priority = {"Venta": 0, "Pack ID": 1, "Número de guía / Envío": 2}
+        recognized = [(kind, identifier) for kind, identifier in identifiers if identifier in aliases]
+        if not recognized:
+            details = "\n".join(f"{kind}: {identifier}" for kind, identifier in identifiers)
+            raise ControlError("No se pudo relacionar esta etiqueta con el PDF mediante "
+                               "Venta, Pack ID o número de guía.\n" + details + "\n" + label_details(block))
+        kind, identifier = min(recognized, key=lambda item: priority[item[0]])
+        number, order = aliases[identifier]
         line = " /".join(f"{row.quantity}/{row.sku}" for row in table_by_order[number])
         try:
             block, font = insert_label_data(block, number, identifier, line or None)
@@ -417,15 +426,13 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
                 identity_rows.append(TableRow(identifier, 1, "", shipping))
         aliases, _, _ = resolve_table(orders, rows, identity_rows)
         blocked_orders = set()
+        ignored_records = []
         for error in bad_rows:
-            matches = {aliases[value][0]: aliases[value] for value in
-                       (error.identifier, error.shipping_id) if value and value in aliases}
-            if len(matches) != 1:
-                if matches:
-                    error.args = (str(error) + "\nIdentificadores de pedidos distintos:\n"
-                                  + "\n\n".join(order_description(*pair) for pair in matches.values()),)
-                raise error
-            number, order = next(iter(matches.values()))
+            pair = match_record(aliases, numeric_id(error.identifier), numeric_id(error.shipping_id))
+            if pair is None:
+                ignored_records.append(str(error))
+                continue
+            number, order = pair
             error.args = (str(error) + "\n" + order_description(number, order),)
             error.can_omit = True
             if not allow_missing:
@@ -433,8 +440,9 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
             blocked_orders.add(number)
             row_warnings.append(str(error))
         if blocked_orders:
-            rows = [row for row in rows if not any(aliases[value][0] in blocked_orders
-                    for value in (row.identifier, row.shipping_id) if value and value in aliases)]
+            rows = [row for row in rows
+                    if (pair := match_record(aliases, row.identifier, row.shipping_id)) is None
+                    or pair[0] not in blocked_orders]
         if not rows and not bad_rows and not allow_missing:
             raise MissingTableError("La tabla no contiene datos para estos pedidos:\n\n"
                                     + "\n\n".join(order_description(n, order) for n, order in enumerate(orders, 1)))
@@ -474,8 +482,10 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
                           "se usa solo en la etiqueta; su SKU no se puede verificar contra el PDF."
                           for number, order in enumerate(orders, 1)
                           for product in order.products if product.sku is None)
-            report.extend(["", "FILAS DE LA TABLA NO UTILIZADAS", f"Total: {len(labels.unused_rows)}"])
+            report.extend(["", "REGISTROS IGNORADOS: NO CORRESPONDEN A ESTA SOLICITUD",
+                           f"Total: {len(labels.unused_rows) + len(ignored_records)}"])
             report.extend(row_description(row) for row in labels.unused_rows)
+            report.extend(ignored_records)
             report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
             import fitz
             with fitz.open(pdf_path) as checked:
@@ -497,7 +507,7 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
             return BundleResult(final_folder, final_folder / pdf_path.name,
                                 final_folder / "Etiquetas" / txt_name,
                                 final_folder / report_path.name, len(orders),
-                                len(labels.labels), pages, len(labels.unused_rows), len(labels.differences),
+                                len(labels.labels), pages, len(labels.unused_rows) + len(ignored_records), len(labels.differences),
                                 allow_missing=allow_missing, number_only_orders=labels.number_only_orders)
         except Exception:
             if final_folder:

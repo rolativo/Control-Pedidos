@@ -293,12 +293,14 @@ class LabelTests(unittest.TestCase):
         self.assertIn("Venta: 2000019000000002",result.number_only_orders[0])
         self.assertIn("SKU pegado: OTRO",result.report.read_text(encoding="utf-8"))
 
-    def test_unidentifiable_bad_row_cannot_remove_sku_from_an_arbitrary_guide(self):
+    def test_unidentified_extra_row_is_ignored_without_removing_the_matched_sku(self):
         fixture(self.pdf,[entries()])
         self.txt.write_text(label(),encoding="utf-8")
-        with self.assertRaises(ControlError):
-            bundle_files(self.pdf,self.txt,"fila sin identificador",self.output,allow_missing=True)
-        self.assertFalse(self.output.exists())
+        table="2000018000000001\t40\tSKU-A\nfila sin identificador"
+        result=bundle_files(self.pdf,self.txt,table,self.output)
+        self.assertIn("40/SKU-A",result.labels_file.read_text(encoding="utf-8"))
+        self.assertEqual(result.unused_rows,1)
+        self.assertEqual(result.number_only_orders,[])
 
     def make_zip(self):
         fixture(self.pdf,[entries()])
