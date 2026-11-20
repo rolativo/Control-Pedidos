@@ -216,7 +216,9 @@ class LabelTests(unittest.TestCase):
             bundle_files(self.pdf,self.txt,pasted,self.output)
         message = str(caught.exception)
         self.assertIn("Venta: 2000019000000001",message)
-        self.assertIn("renglón 1",message)
+        self.assertIn("SKU pegado: SKU-A",message)
+        self.assertIn("Cantidad pegada: mal",message)
+        self.assertNotIn("renglón 1",message)
         self.assertIn(pasted,message)
         self.assertNotIn("renglón 0",message)
         self.assertFalse(self.output.exists())
@@ -289,7 +291,7 @@ class LabelTests(unittest.TestCase):
         self.assertIn("NUMERO_CONSECUTIVO 02",blocks[1])
         self.assertEqual(len(result.number_only_orders),1)
         self.assertIn("Venta: 2000019000000002",result.number_only_orders[0])
-        self.assertIn("renglón 3",result.report.read_text(encoding="utf-8"))
+        self.assertIn("SKU pegado: OTRO",result.report.read_text(encoding="utf-8"))
 
     def test_unidentifiable_bad_row_cannot_remove_sku_from_an_arbitrary_guide(self):
         fixture(self.pdf,[entries()])

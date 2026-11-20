@@ -14,6 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from control import ControlError, convert
 from diagnostico import record_error, install_handlers, startup_error
+from version import VERSION
 
 
 def open_path(path: Path):
@@ -167,12 +168,13 @@ class Application:
 
 def main():
     parser = argparse.ArgumentParser(description="Generar controles compactos de Mercado Libre.")
+    parser.add_argument("--version", action="version", version=VERSION)
     parser.add_argument("files", nargs="*", help="PDF originales")
     parser.add_argument("--sin-ventana", action="store_true", help="Procesar sin interfaz")
     parser.add_argument("--salida", help="Carpeta para los PDF generados")
     parser.add_argument("--zip", dest="zip_path", help="ZIP con el PDF y el TXT")
     parser.add_argument("--txt", help="TXT de etiquetas, para combinar con un PDF")
-    parser.add_argument("--tabla", help="Archivo con las tres columnas copiadas")
+    parser.add_argument("--tabla", help="Venta / Pack ID, Cantidad, SKU y Número de guía opcional")
     parser.add_argument("--permitir-faltantes", action="store_true", help="Sin SKU solo en guías con datos faltantes")
     args = parser.parse_args()
     if args.sin_ventana:

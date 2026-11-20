@@ -8,6 +8,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_control import fixture, entries
 from test_etiquetas import label, BLOCK
+from test_shipping import shipping_entries, shipping_label
 
 
 def main():
@@ -59,6 +60,31 @@ def main():
             raise RuntimeError("La guía con datos perdió su SKU o su número.")
         if "DATOS_PACK" in blocks[1] or "NUMERO_CONSECUTIVO 02" not in blocks[1]:
             raise RuntimeError("La guía sin datos no quedó únicamente con su consecutivo.")
+        # PDF mixto: el primer pedido tiene Envío y el segundo Venta/Pack ID.
+        mixed_pdf = folder / "control-envios.pdf"
+        fixture(mixed_pdf,[shipping_entries()+entries(230,sale="2000019000000002",pack="2000018000000002")])
+        mixed_zip = folder / "envios.zip"
+        with zipfile.ZipFile(mixed_zip,"w") as z:
+            z.writestr("control.pdf",mixed_pdf.read_bytes())
+            z.writestr("etiquetas.txt",shipping_label()+shipping_label("48580000002"))
+        table.write_text("2000019000000001\t100\tSMEN40NE\t48580000001\n"
+                         "2000019000000002\t20\tSKU-B\t48580000002",encoding="utf-8")
+        mixed_output = folder / "envios-salida"
+        mixed = subprocess.run([str(executable),"--sin-ventana","--zip",str(mixed_zip),
+                                "--tabla",str(table),"--salida",str(mixed_output)],timeout=90)
+        if mixed.returncode:
+            raise RuntimeError("El ejecutable no cruzó los formatos por la cuarta columna de guía.")
+        blocks=BLOCK.findall(list(mixed_output.glob("*/Etiquetas/*.txt"))[0].read_text(encoding="utf-8"))
+        if "100/SMEN40NE" not in blocks[0] or "20/SKU-B" not in blocks[1]:
+            raise RuntimeError("El ejecutable mezcló o eliminó SKU al cruzar por guía.")
+        table.write_text("2000019000000001\tmal\tSKU-ERROR\t48580000001",encoding="utf-8")
+        errors=folder / "error-identificado"
+        failed=subprocess.run([str(executable),"--sin-ventana","--zip",str(folder / "Surtido envios.zip"),
+                               "--tabla",str(table),"--salida",str(errors)],timeout=90)
+        diagnostic=list(errors.glob("Error_Control*.txt"))[0].read_text(encoding="utf-8")
+        if failed.returncode!=1 or not all(value in diagnostic for value in
+                                           ("2000019000000001","48580000001","SKU-ERROR","2026.11.20.1")):
+            raise RuntimeError("El error del ejecutable no identificó Venta, guía, SKU y versión.")
         print("Ejecutable probado: PDF y etiquetas generados correctamente.")
 
 

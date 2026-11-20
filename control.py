@@ -34,6 +34,7 @@ class Order:
     sale: str | None = None
     pack_id: str | None = None
     products: list[Product] = field(default_factory=list)
+    shipping_id: str | None = None
 
 
 @dataclass
@@ -74,9 +75,29 @@ def get_lines(page: fitz.Page) -> list[Line]:
     return sorted(result, key=lambda l: (round(l.y, 1), l.x))
 
 
-META = re.compile(r"^(Pack\s*ID|Venta)\s*:\s*(.*)$", re.I)
+META = re.compile(r"^(Pack\s*ID|Venta|Env[ií]o|(?:N[uú]mero\s+de\s+)?(?:gu[ií]a|env[ií]o)|Identificador\s+de\s+env[ií]o)\s*:\s*(.*)$", re.I)
 FIELD = re.compile(r"^([^:]{1,65}):\s*(.*)$")
 OPAQUE = re.compile(r"^[A-Z0-9-]{10,}$")
+
+
+def order_ids(order):
+    return tuple(value for value in (order.sale, order.pack_id, order.shipping_id) if value)
+
+
+def order_identity(order):
+    return " | ".join(label + ": " + value for label, value in
+                      (("Venta", order.sale), ("Pack ID", order.pack_id),
+                       ("Número de guía / Envío", order.shipping_id)) if value)
+
+
+def pdf_details(left, right, start, end=float("inf")):
+    """Datos del bloque exacto para localizarlo, sin adivinar una venta."""
+    identity = [line.text for line in left if start <= line.y < end and META.match(line.text)]
+    markers = [line.text for line in left if start <= line.y < end
+               and line.bold and OPAQUE.fullmatch(line.text)]
+    products = [line.text for line in right if start <= line.y < end
+                and (line.bold or line.text.casefold().startswith(("sku:", "cantidad:")))]
+    return "\n".join(identity + ["Referencia del PDF: " + value for value in markers] + products)
 
 
 def page_sections(lines: list[Line], page_number: int):
@@ -97,8 +118,13 @@ def page_sections(lines: list[Line], page_number: int):
             continue
         label, value = match.groups()
         if not re.fullmatch(r"\d{8,25}", value):
-            raise ControlError(f"Página {page_number}: {label} no se pudo leer: {value!r}.")
-        kind = "pack_id" if label.lower().startswith("pack") else "sale"
+            markers = [l.y - 1 for l in left if l.bold and OPAQUE.fullmatch(l.text)]
+            start = max((y for y in markers if y <= line.y), default=heading.y + 8)
+            end = min((y for y in markers if y > line.y), default=float("inf"))
+            raise ControlError(f"Página {page_number}: {label} no se pudo leer: {value!r}.\n"
+                               + pdf_details(left, right, start, end))
+        kind = ("pack_id" if label.lower().startswith("pack") else
+                "sale" if label.lower() == "venta" else "shipping_id")
         if (groups and not getattr(groups[-1]["order"], kind)
                 and line.y - previous_meta_y < 40
                 and not any(previous_meta_y < l.y < line.y and l.bold
@@ -119,8 +145,11 @@ def page_sections(lines: list[Line], page_number: int):
         previous_meta_y = line.y
     for marker in (l for l in left if l.bold and OPAQUE.fullmatch(l.text)):
         if not any(abs(group["start"] - marker.y) < 3 for group in groups):
-            raise ControlError(f"Página {page_number}: hay un pedido sin Venta ni Pack ID "
-                               "que no se puede identificar.")
+            end = min((l.y - 1 for l in left if l.bold and OPAQUE.fullmatch(l.text)
+                       and l.y > marker.y), default=float("inf"))
+            raise ControlError(f"No se pudo identificar este pedido en el PDF (página {page_number}).\n"
+                               + pdf_details(left, right, marker.y - 1, end)
+                               + "\nNo se reconoció Venta, Pack ID ni número de guía / Envío.")
     prefix = []
     for line in right:
         eligible = [g for g in groups if line.y >= g["start"]]
@@ -225,7 +254,8 @@ def read_orders(source: Path) -> tuple[list[Order], int]:
             groups, prefix = page_sections(lines, page.number + 1)
             if prefix:
                 if not raw_groups:
-                    raise ControlError(f"Página {page.number + 1}: productos sin pedido identificable.")
+                    raise ControlError(f"Página {page.number + 1}: productos sin pedido identificable.\n"
+                                       + "\n".join(line.text for line in prefix))
                 raw_groups[-1]["lines"].extend(prefix)
             raw_groups.extend(groups)
             for line in lines:
@@ -234,27 +264,41 @@ def read_orders(source: Path) -> tuple[list[Order], int]:
                 if line.text.lower().startswith("cantidad:"):
                     value = clean(line.text.split(":", 1)[1])
                     if not re.fullmatch(r"[1-9]\d*", value):
-                        raise ControlError(f"Página {page.number + 1}: cantidad ilegible ({value}).")
+                        group = next((g for g in reversed(raw_groups) if line in g["lines"]), None)
+                        details = (order_identity(group["order"]) + "\n"
+                                   + "\n".join(l.text for l in group["lines"]
+                                               if l.bold or l.text.casefold().startswith(("sku:", "cantidad:")))) if group else line.text
+                        raise ControlError(f"Cantidad ilegible en el PDF: {value}.\n" + details)
                     qty_audit[int(value)] += 1
     if not raw_groups:
-        raise ControlError("No se detectó ninguna Venta ni Pack ID.")
+        raise ControlError("No se detectó ninguna Venta, Pack ID ni número de guía / Envío.")
     orders: list[Order] = []
     by_key: dict[tuple[str, str], dict] = {}
     for group in raw_groups:
         order = group["order"]
-        key = ("sale", order.sale) if order.sale else ("pack", order.pack_id)
+        key = (("sale", order.sale) if order.sale else ("pack", order.pack_id)
+               if order.pack_id else ("shipping", order.shipping_id))
         if key in by_key:
             target = by_key[key]["order"]
             if target.pack_id and order.pack_id and target.pack_id != order.pack_id:
                 raise ControlError(f"Venta {order.sale}: aparecen Pack ID distintos.")
             target.pack_id = target.pack_id or order.pack_id
+            if target.shipping_id and order.shipping_id and target.shipping_id != order.shipping_id:
+                raise ControlError(order_identity(order) + ": aparecen números de guía distintos.")
+            target.shipping_id = target.shipping_id or order.shipping_id
             by_key[key]["lines"].extend(group["lines"])
         else:
             by_key[key] = group
             orders.append(order)
     for group in by_key.values():
         order = group["order"]
-        order.products = parse_products(group["lines"], order.sale or order.pack_id)
+        try:
+            order.products = parse_products(group["lines"], order_identity(order))
+        except ControlError as exc:
+            details = "\n".join(line.text for line in group["lines"]
+                                if line.bold or line.text.casefold().startswith(("sku:", "cantidad:")))
+            raise ControlError(str(exc) + "\nDatos del pedido:\n" + order_identity(order)
+                               + "\n" + details) from exc
     parsed = [p for order in orders for p in order.products]
     if Counter(p.sku for p in parsed if p.sku is not None) != sku_audit:
         raise ControlError("La validación detectó SKU faltantes o duplicados. No se generó un PDF.")
@@ -304,6 +348,8 @@ def content(order: Order, products: list[Product], width: float, continuation: b
         ids.append("Pack ID: " + order.pack_id)
     if order.sale:
         ids.append("Venta: " + order.sale)
+    if order.shipping_id:
+        ids.append("Guía / Envío: " + order.shipping_id)
     combined = " | ".join(ids)
     id_rows = [combined] if pdfmetrics.stringWidth(combined, "Control", 6.8) <= width else ids
     for text in id_rows:
@@ -335,7 +381,7 @@ def render_pdf(orders: list[Order], destination: Path) -> int:
             for text in texts:
                 if any(ord(char) not in pdfmetrics.getFont("Control").face.charToGlyph
                        for char in text):
-                    raise ControlError(f"SKU {product.sku}: el texto tiene caracteres que no se "
+                    raise ControlError(order_identity(order) + f"\nSKU {product.sku}: el texto tiene caracteres que no se "
                                        "pueden imprimir con la fuente del programa.")
     page_width, page_height = A4
     margin, gap, padding, number_width = 17.0, 9.0, 5.0, 41.0

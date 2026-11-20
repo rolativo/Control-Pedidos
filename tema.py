@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import tkinter as tk
 from tkinter import ttk
+from version import VERSION
 
 
 NAME = "El todo poderOSO"
@@ -75,5 +76,5 @@ def apply_theme(root):
     words = ttk.Frame(header)
     words.pack(side="left", fill="x", expand=True)
     ttk.Label(words, text=NAME, style="Brand.TLabel").pack(anchor="w")
-    ttk.Label(words, text="Control de pedidos · Etiquetas · Excel", style="Muted.TLabel").pack(anchor="w")
+    ttk.Label(words, text=f"Control de pedidos · Etiquetas · Excel · Versión {VERSION}", style="Muted.TLabel").pack(anchor="w")
     tk.Frame(root, background=LIME, height=2).pack(fill="x", padx=20, pady=(0, 6))

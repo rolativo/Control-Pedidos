@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import traceback
+from version import VERSION
 
 
 def record_error(message, source=None, output=None, exception=None):
@@ -14,7 +15,8 @@ def record_error(message, source=None, output=None, exception=None):
         folders.append(Path(source).resolve().parent)
     folders.append(Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ControlPedidos" / "Errores")
     folders.append(Path(tempfile.gettempdir()) / "ControlPedidos" / "Errores")
-    report = ["ERROR DE CONTROL DE PEDIDOS", datetime.now().isoformat(timespec="seconds"), "", str(message)]
+    report = ["ERROR DE CONTROL DE PEDIDOS", datetime.now().isoformat(timespec="seconds"),
+              "Versión del programa: " + VERSION, "", str(message)]
     if source:
         report.extend(["", "Archivo seleccionado: " + str(source)])
     if exception is not None:

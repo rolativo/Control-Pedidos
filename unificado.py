@@ -38,8 +38,8 @@ class BundlePanel:
         ttk.Label(heading, text="Control y etiquetas", font=("Segoe UI", 19, "bold")).pack(side="left")
         self.generator = GeneratorLauncher(root, heading, open_path)
         self.generator.frame.pack(side="right")
-        ttk.Label(frame, text="Elige el ZIP de Mercado Libre y pega las tres columnas: "
-                  "Pack ID o Venta, Cantidad y SKU.", wraplength=900).pack(anchor="w", pady=(4, 12))
+        ttk.Label(frame, text="Elige el ZIP y pega: Venta / Pack ID, Cantidad, SKU y Número de guía. "
+                  "La cuarta columna es opcional si el identificador ya coincide.", wraplength=900).pack(anchor="w", pady=(4, 12))
         selectors = ttk.Frame(frame)
         selectors.pack(fill="x")
         self.buttons = []
@@ -134,7 +134,8 @@ class BundlePanel:
         try:
             text = self.root.clipboard_get()
         except tk.TclError as exc:
-            self.show_error("El portapapeles no contiene texto. Copia las tres columnas primero.", exc)
+            self.show_error("El portapapeles no contiene texto. Copia Venta / Pack ID, Cantidad, SKU "
+                            "y Número de guía (si existe).", exc)
             return
         self.text.delete("1.0", "end")
         self.text.insert("1.0", text)
@@ -142,7 +143,7 @@ class BundlePanel:
             rows = parse_table(text)
             self.status.set(f"Tabla pegada: {len(rows)} filas. Se usarán tus SKU y cantidades en las etiquetas.")
         except ControlError:
-            self.status.set("Texto pegado. Al generar se revisará la tabla y se indicará la Venta si hay un error.")
+            self.status.set("Texto pegado. Al generar se indicarán Venta, Pack ID, guía y SKU disponibles si hay un error.")
 
     def mode_changed(self):
         self.status.set("Solo las guías sin datos tendrán el consecutivo; las demás conservarán tus SKU y cantidades."

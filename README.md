@@ -214,3 +214,31 @@ En línea de comandos, para permitir datos faltantes solo en las guías afectada
 ```bash
 python app.py --sin-ventana --zip pedidos.zip --tabla tabla.txt --permitir-faltantes --salida controles
 ```
+
+
+## Versión 2026.11.20.1: número de guía y errores identificables
+
+El lector acepta pedidos con `Envío`, `Envio`, `Guía`, Venta o Pack ID, mezclados
+en el mismo PDF. El control imprime los identificadores que realmente existen
+en el PDF original. No inventa Ventas para los pedidos que solo tienen Envío.
+
+Pega las columnas en este orden: **Venta / Pack ID, Cantidad, SKU, Número de guía**.
+La cuarta columna es opcional para los archivos anteriores. También se aceptan
+tres columnas con el número de guía directamente como primer identificador.
+Si no existe Venta/Pack ID, puede quedar vacía la primera columna cuando hay guía.
+
+El cruce se realiza por los identificadores, nunca por coincidencia de SKU.
+La cuarta columna permite enlazar la Venta de Excel con el Envío del PDF o
+la guía ZPL. Un mismo pedido mantiene un consecutivo y todos sus SKU.
+Si la Venta y la guía apuntan a pedidos distintos, se detiene y muestra ambos.
+Los SKU y cantidades pegados conservan prioridad para las etiquetas.
+
+Los errores muestran Venta, Pack ID, guía/Envío, SKU y cantidad disponibles,
+y el registro pegado cuando corresponde. Si el PDF no tiene ningún identificador,
+se muestran referencia y productos del bloque para localizarlo; no se inventa una Venta.
+La versión aparece en la ventana y en cada archivo de error.
+
+La opción para continuar sin SKU solo afecta a las guías sin datos utilizables.
+El resto conserva los datos pegados. Los códigos de barras y los campos originales
+de envío se conservan. El Generador de Excel sigue usando su formato y su botón
+máscara; la cuarta columna solo se agrega a la tabla de control y etiquetas.

@@ -11,12 +11,24 @@ from app import create_window
 from PIL import ImageGrab
 from test_control import fixture, entries
 from test_etiquetas import label, BLOCK
+from test_shipping import shipping_entries, shipping_label
+from version import VERSION
 
 
 root = create_window()
 try:
     root.update()
     assert root.title() == "El todo poderOSO"
+    def displayed_text(widget):
+        values=[]
+        try:
+            values.append(str(widget.cget("text")))
+        except Exception:
+            pass
+        for child in widget.winfo_children():
+            values.extend(displayed_text(child))
+        return values
+    assert any(VERSION in text for text in displayed_text(root))
     assert [root.notebook.tab(tab,"text") for tab in root.notebook.tabs()] == ["Principal","Solo control PDF"]
     generator = root.bundle_panel.generator
     assert generator.button.winfo_ismapped()
@@ -71,6 +83,25 @@ try:
             assert panel.source_zip.name == "Surtido prueba.zip"
         panel.numbers_option.invoke()
         assert not panel.allow_missing.get()
+        panel.text.delete("1.0","end")
+        fixture(pdf,[shipping_entries()+entries(230,sale="2000019000000002",pack="2000018000000002")])
+        archive=directory / "envios.zip"
+        with zipfile.ZipFile(archive,"w") as z:
+            z.writestr("Control.pdf",pdf.read_bytes())
+            z.writestr("etiquetas.txt",shipping_label()+shipping_label("48580000002"))
+        panel.source_zip=archive
+        panel.text.insert("1.0","2000019000000001\t100\tSMEN40NE\t48580000001\n"
+                          "2000019000000002\t20\tSKU-B\t48580000002")
+        with patch("unificado.copy_to_nas",side_effect=lambda result:result):
+            panel.start()
+            deadline=time.monotonic()+15
+            while panel.busy and time.monotonic()<deadline:
+                root.update()
+                time.sleep(0.01)
+            assert not panel.busy and panel.result is not None
+            assert panel.result.number_only_orders == []
+            blocks=BLOCK.findall(panel.result.labels_file.read_text(encoding="utf-8"))
+            assert "100/SMEN40NE" in blocks[0] and "20/SKU-B" in blocks[1]
         panel.text.delete("1.0","end")
         panel.source_zip = None
         panel.source_pdf = panel.source_txt = None

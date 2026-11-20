@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import zipfile
 
-from control import ControlError, Order, read_orders, render_pdf
+from control import ControlError, Order, read_orders, render_pdf, order_ids, order_identity
 
 
 class MissingTableError(ControlError):
@@ -20,20 +20,27 @@ class MissingTableError(ControlError):
 
 
 class TableRowError(ControlError):
-    def __init__(self, index, raw, message, identifier=None):
+    def __init__(self, index, raw, message, identifier=None, shipping_id=None, sku=None, quantity=None):
+        self.index = index
         self.identifier = identifier
-        details = f"Tabla pegada, renglón {index}: {message}\n"
+        self.shipping_id = shipping_id
+        self.sku = sku
+        self.quantity = quantity
+        details = ["No se pudo usar este registro de la tabla: " + message]
         if identifier:
-            details += f"Venta o Pack ID de ese renglón: {identifier}\n"
-        super().__init__(details + f"Texto exacto pegado: {raw.strip()}")
+            details.append("Venta / Pack ID / identificador pegado: " + identifier)
+        if shipping_id:
+            details.append("Número de guía / Envío: " + shipping_id)
+        if sku:
+            details.append("SKU pegado: " + sku)
+        if quantity:
+            details.append("Cantidad pegada: " + quantity)
+        details.append("Texto exacto pegado: " + raw.strip())
+        super().__init__("\n".join(details))
 
 
 def order_description(number, order):
-    parts = [f"Consecutivo del control: {number:02d}"]
-    if order.sale:
-        parts.append("Venta: " + order.sale)
-    if order.pack_id:
-        parts.append("Pack ID: " + order.pack_id)
+    parts = [f"Consecutivo del control: {number:02d}", order_identity(order)]
     skus = [p.sku for p in order.products if p.sku]
     if skus:
         parts.append("SKU en el PDF: " + ", ".join(skus))
@@ -45,6 +52,64 @@ class TableRow:
     identifier: str
     quantity: int
     sku: str
+    shipping_id: str | None = None
+
+
+def row_description(row):
+    values = []
+    if row.identifier:
+        values.append("Venta / Pack ID / identificador pegado: " + row.identifier)
+    if row.shipping_id:
+        values.append("Número de guía / Envío: " + row.shipping_id)
+    values.extend(("SKU pegado: " + row.sku, "Cantidad pegada: " + str(row.quantity)))
+    return "\n".join(values)
+
+
+def resolve_table(orders, rows, identity_rows=()):
+    """Cruza por identificadores explícitos; una coincidencia conflictiva se rechaza."""
+    aliases = {}
+    for number, order in enumerate(orders, 1):
+        for identifier in order_ids(order):
+            if identifier in aliases and aliases[identifier][0] != number:
+                raise ControlError("El mismo identificador aparece en pedidos distintos:\n"
+                                   + order_description(*aliases[identifier]) + "\n"
+                                   + order_description(number, order))
+            aliases[identifier] = (number, order)
+    # Las cuatro columnas pueden enlazar una guía nueva con una Venta del PDF
+    # antiguo, o una Venta de Excel con una guía del PDF nuevo. Nunca por SKU.
+    pending = list(rows) + list(identity_rows)
+    while pending:
+        remaining = []
+        progress = False
+        for row in pending:
+            ids = [value for value in (row.identifier, row.shipping_id) if value]
+            matches = {aliases[value][0]: aliases[value] for value in ids if value in aliases}
+            if len(matches) > 1:
+                raise ControlError("Datos contradictorios: la Venta / Pack ID y la guía "
+                                   "corresponden a pedidos distintos.\n" + row_description(row)
+                                   + "\n\n" + "\n\n".join(order_description(*pair) for pair in matches.values()))
+            if not matches:
+                remaining.append(row)
+                continue
+            pair = next(iter(matches.values()))
+            for identifier in ids:
+                aliases[identifier] = pair
+            progress = True
+        if not progress:
+            break
+        pending = remaining
+    table_by_order = defaultdict(list)
+    unused = []
+    for row in rows:
+        matches = {aliases[value][0]: aliases[value] for value in (row.identifier, row.shipping_id)
+                   if value and value in aliases}
+        if len(matches) > 1:
+            raise ControlError("La tabla contiene identificadores contradictorios.\n" + row_description(row))
+        if matches:
+            table_by_order[next(iter(matches))].append(row)
+        else:
+            unused.append(row)
+    return aliases, table_by_order, unused
 
 
 @dataclass(frozen=True)
@@ -85,7 +150,7 @@ class BundleResult:
 
 
 def parse_table(text: str, errors=None) -> list[TableRow]:
-    """Admite tres columnas copiadas de Excel o una tabla Markdown."""
+    """Admite Venta/Pack ID, cantidad, SKU y guía opcional; Excel o Markdown."""
     rows = []
     for index, raw in enumerate(text.splitlines(), 1):
         try:
@@ -98,54 +163,62 @@ def parse_table(text: str, errors=None) -> list[TableRow]:
         if row:
             rows.append(row)
     if not rows and errors is None:
-        raise ControlError("La tabla está vacía. Copia las tres columnas y pulsa Pegar tabla.")
+        raise ControlError("La tabla está vacía. Copia Venta / Pack ID, Cantidad, SKU y Número de guía (si existe).")
     return rows
 
 
 def parse_table_row(index, raw):
-    line = raw.strip()
-    if not line:
+    line = raw.strip(" \r\n")
+    if not line.strip():
         return None
     if line.startswith("|"):
-        columns = [c.strip() for c in line.strip("|").split("|")]
+        inner = line[1:-1] if line.endswith("|") else line[1:]
+        columns = [c.strip() for c in inner.split("|")]
     elif "\t" in line:
         columns = [c.strip() for c in line.split("\t")]
     else:
         columns = [c.strip() for c in re.split(r"\s{2,}", line)]
-    identifier = columns[0].removeprefix("/") if columns else None
-    readable_id = identifier if identifier and re.fullmatch(r"\d{12,22}", identifier) else None
     if columns and all(re.fullmatch(r":?-+:?", c.replace(" ", "")) for c in columns):
         return None
-    if len(columns) == 3 and columns[0].casefold().replace(" ", "") in (
-            "packid", "packid/venta", "packidoventa", "venta", "pedido", "identificador"):
+    first = columns[0].casefold().replace(" ", "") if columns else ""
+    if len(columns) in (3, 4) and first in (
+            "packid", "packid/venta", "packidoventa", "venta", "pedido", "identificador",
+            "guía", "guia", "envio", "envío", "númerodeguía", "numerodeguia"):
         return None
-    if len(columns) != 3:
-        raise TableRowError(index, raw, "copia exactamente tres columnas: "
-                            "Pack ID o Venta, Cantidad y SKU.", readable_id)
-    identifier = columns[0].removeprefix("/")
-    quantity, sku = columns[1:]
-    if not re.fullmatch(r"\d{12,22}", identifier):
-        raise TableRowError(index, raw, "Pack ID o Venta ilegible.")
+    identifier = columns[0].lstrip("/#") if columns else ""
+    quantity = columns[1] if len(columns) > 1 else ""
+    sku = columns[2] if len(columns) > 2 else ""
+    shipping = columns[3].lstrip("/#") if len(columns) == 4 else None
+    def invalid(message):
+        raise TableRowError(index, raw, message, identifier or None, shipping or None, sku, quantity)
+    if len(columns) not in (3, 4):
+        invalid("copia Venta / Pack ID, Cantidad, SKU y, como cuarta columna, Número de guía.")
+    if shipping and not re.fullmatch(r"\d{8,25}", shipping):
+        invalid("número de guía ilegible; copia todos sus dígitos como texto.")
+    if (identifier and not re.fullmatch(r"\d{8,25}", identifier)) or not (identifier or shipping):
+        invalid("Venta / Pack ID / número de guía ilegible.")
     if not re.fullmatch(r"[1-9]\d*", quantity):
-        raise TableRowError(index, raw, "la cantidad debe ser un entero mayor que cero.", identifier)
+        invalid("la cantidad debe ser un entero mayor que cero.")
     if not sku or re.search(r"[\s^~\x00-\x1f\x7f]", sku):
-        raise TableRowError(index, raw, "SKU vacío o con caracteres no admitidos.", identifier)
-    return TableRow(identifier, int(quantity), sku)
+        invalid("SKU vacío o con caracteres no admitidos.")
+    return TableRow(identifier, int(quantity), sku, shipping or None)
+
 
 BLOCK = re.compile(r"\^XA.*?\^XZ", re.S)
 FO_FIELD = re.compile(r"\^FO(\d+),(\d+)((?:(?!\^FO|\^XZ).)*?)\^FD(.*?)\^FS", re.S)
-ID_VALUE = re.compile(r"^(Pack\s*ID|Venta)\s*:\s*(\d+)$", re.I)
+ID_VALUE = re.compile(r"^(Pack\s*ID|Venta|Env[ií]o|(?:N[uú]mero\s+de\s+)?gu[ií]a)\s*:\s*(\d+)$", re.I)
 
 
 def label_identifiers(block: str) -> list[tuple[str, str]]:
-    """Reconstruye IDs fragmentados por coordenadas, sin leer números de envío."""
+    """Reconstruye los identificadores explícitos de la cabecera por coordenadas."""
     fields = [(int(m[1]), int(m[2]), m[4]) for m in FO_FIELD.finditer(block)]
     found = []
     for x, y, value in fields:
         match = ID_VALUE.fullmatch(value.strip())
         if not match:
             continue
-        kind = "Pack ID" if match[1].lower().startswith("pack") else "Venta"
+        kind = ("Pack ID" if match[1].lower().startswith("pack") else
+                "Venta" if match[1].lower() == "venta" else "Número de guía / Envío")
         value = match[2]
         # Mercado Libre imprime el fragmento en negrita dos veces con un píxel
         # de diferencia. Solo se toma una vez. Las coordenadas excluyen códigos
@@ -158,10 +231,17 @@ def label_identifiers(block: str) -> list[tuple[str, str]]:
                 continue
             value += text
             previous_x, previous_text = fx, text
-        if not re.fullmatch(r"\d{12,22}", value):
+        if not re.fullmatch(r"\d{8,25}", value):
             raise ControlError(f"No se pudo reconstruir el {kind} de una etiqueta.")
         found.append((kind, value))
     return found
+
+
+def label_details(block):
+    details = [f"{kind}: {identifier}" for kind, identifier in label_identifiers(block)]
+    shipping = re.findall(r"\^BC[^\^]*\^FD>:(\d+)\^FS", block)
+    details.extend("Código de envío de la etiqueta: " + value for value in dict.fromkeys(shipping))
+    return "\n".join(details) or "La etiqueta no contiene un identificador de envío legible."
 
 
 def zpl_field(text: str) -> str:
@@ -206,28 +286,16 @@ def insert_label_data(block: str, number: int, identifier: str, text: str | None
     return block, font
 
 
-def transform_labels(text: str, orders: list[Order], rows: list[TableRow], allow_missing=False) -> LabelResult:
-    order_ids = {}
-    for number, order in enumerate(orders, 1):
-        for identifier in (order.pack_id, order.sale):
-            if identifier:
-                if identifier in order_ids and order_ids[identifier][0] != number:
-                    raise ControlError("Un identificador corresponde a dos pedidos diferentes.")
-                order_ids[identifier] = (number, order)
-    table_by_order = defaultdict(list)
-    unused = []
-    for row in rows:
-        if row.identifier in order_ids:
-            table_by_order[order_ids[row.identifier][0]].append(row)
-        else:
-            unused.append(row)
+def transform_labels(text: str, orders: list[Order], rows: list[TableRow], allow_missing=False,
+                     identity_rows=()) -> LabelResult:
+    aliases, table_by_order, unused = resolve_table(orders, rows, identity_rows)
     differences = []
     missing = [(number, order) for number, order in enumerate(orders, 1)
                if not table_by_order[number]]
     if missing and not allow_missing:
         raise MissingTableError("Faltan datos en la tabla para estos pedidos:\n\n"
                                 + "\n\n".join(order_description(number, order) for number, order in missing)
-                                + "\n\nBusca estas Ventas o Pack ID en Excel y copia sus filas. "
+                                + "\n\nBusca estas Ventas, Pack ID o números de guía en Excel y copia sus datos. "
                                   "El consecutivo es el número del control, no la fila de Excel.\n"
                                   "También puedes continuar dejando solo el consecutivo en estas guías. "
                                   "Las demás conservarán los SKU y cantidades pegados.")
@@ -255,24 +323,31 @@ def transform_labels(text: str, orders: list[Order], rows: list[TableRow], allow
         identifiers = label_identifiers(block)
         if not identifiers:
             if "^FD" in block or "^FO" in block or "^GFA" in block or "^GF" in block:
-                raise ControlError("Una etiqueta no tiene Pack ID ni Venta reconocibles.")
+                raise ControlError("Una etiqueta no tiene Venta, Pack ID ni número de guía reconocibles.\n"
+                                   + label_details(block))
             configuration += 1
             output.append(block)
             cursor = match.end()
             continue
         pairs = []
         for kind, identifier in identifiers:
-            if identifier not in order_ids:
-                raise ControlError(f"Etiqueta con {kind} {identifier}: no aparece en el PDF.")
-            pairs.append((identifier, *order_ids[identifier]))
+            if identifier not in aliases:
+                raise ControlError(f"Etiqueta con {kind}: {identifier}; no se pudo relacionar con el PDF.\n"
+                                   + label_details(block) + "\n"
+                                   + "\n".join(row_description(r) for r in rows
+                                               if identifier in (r.identifier, r.shipping_id)))
+            pairs.append((identifier, *aliases[identifier]))
         if len({pair[1] for pair in pairs}) != 1:
-            raise ControlError("Una etiqueta contiene identificadores de pedidos distintos.")
+            raise ControlError("Una etiqueta contiene identificadores de pedidos distintos.\n"
+                               + "\n\n".join(order_description(number, order)
+                                               for _, number, order in pairs))
         identifier, number, order = pairs[0]
         line = " /".join(f"{row.quantity}/{row.sku}" for row in table_by_order[number])
         try:
             block, font = insert_label_data(block, number, identifier, line or None)
         except ControlError as exc:
-            raise ControlError(str(exc) + "\n" + order_description(number, order)) from exc
+            raise ControlError(str(exc) + "\n" + order_description(number, order) + "\n"
+                               + "\n\n".join(row_description(row) for row in table_by_order[number])) from exc
         labels.append(LabelInfo(number, identifier, line, font))
         seen.add(number)
         output.append(block)
@@ -333,26 +408,37 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
             raise ControlError("No se pudo abrir el PDF del conjunto.") from exc
         bad_rows = []
         row_warnings = []
-        try:
-            rows = parse_table(table, errors=bad_rows) if allow_missing else parse_table(table)
-        except TableRowError as exc:
-            match = next(((n, order) for n, order in enumerate(orders, 1)
-                          if exc.identifier and exc.identifier in (order.sale, order.pack_id)), None)
-            if match:
-                exc.args = (str(exc) + "\n" + order_description(*match),)
-                exc.can_omit = True
-            raise
-        blocked_ids = set()
+        rows = parse_table(table, errors=bad_rows)
+        identity_rows = list(rows)
         for error in bad_rows:
-            match = next(((n, order) for n, order in enumerate(orders, 1)
-                          if error.identifier and error.identifier in (order.sale, order.pack_id)), None)
-            if not match:
+            identifier = error.identifier if error.identifier and re.fullmatch(r"\d{8,25}", error.identifier) else ""
+            shipping = error.shipping_id if error.shipping_id and re.fullmatch(r"\d{8,25}", error.shipping_id) else None
+            if identifier or shipping:
+                identity_rows.append(TableRow(identifier, 1, "", shipping))
+        aliases, _, _ = resolve_table(orders, rows, identity_rows)
+        blocked_orders = set()
+        for error in bad_rows:
+            matches = {aliases[value][0]: aliases[value] for value in
+                       (error.identifier, error.shipping_id) if value and value in aliases}
+            if len(matches) != 1:
+                if matches:
+                    error.args = (str(error) + "\nIdentificadores de pedidos distintos:\n"
+                                  + "\n\n".join(order_description(*pair) for pair in matches.values()),)
                 raise error
-            number, order = match
-            blocked_ids.update(identifier for identifier in (order.sale, order.pack_id) if identifier)
-            row_warnings.append(str(error) + "\n" + order_description(number, order))
-        rows = [row for row in rows if row.identifier not in blocked_ids]
-        labels = transform_labels(label_text, orders, rows, allow_missing)
+            number, order = next(iter(matches.values()))
+            error.args = (str(error) + "\n" + order_description(number, order),)
+            error.can_omit = True
+            if not allow_missing:
+                raise error
+            blocked_orders.add(number)
+            row_warnings.append(str(error))
+        if blocked_orders:
+            rows = [row for row in rows if not any(aliases[value][0] in blocked_orders
+                    for value in (row.identifier, row.shipping_id) if value and value in aliases)]
+        if not rows and not bad_rows and not allow_missing:
+            raise MissingTableError("La tabla no contiene datos para estos pedidos:\n\n"
+                                    + "\n\n".join(order_description(n, order) for n, order in enumerate(orders, 1)))
+        labels = transform_labels(label_text, orders, rows, allow_missing, identity_rows)
         output_root.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=".control-conjunto-", dir=output_root))
         final_folder = None
@@ -389,7 +475,7 @@ def bundle(pdf_bytes: bytes, txt_bytes: bytes, table: str, output_root: Path,
                           for number, order in enumerate(orders, 1)
                           for product in order.products if product.sku is None)
             report.extend(["", "FILAS DE LA TABLA NO UTILIZADAS", f"Total: {len(labels.unused_rows)}"])
-            report.extend(f"{row.identifier}\t{row.quantity}\t{row.sku}" for row in labels.unused_rows)
+            report.extend(row_description(row) for row in labels.unused_rows)
             report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
             import fitz
             with fitz.open(pdf_path) as checked:
